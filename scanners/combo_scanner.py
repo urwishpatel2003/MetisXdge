@@ -245,48 +245,8 @@ def match_legs(contracts: list, lines: list) -> list:
                     best_by_key[key] = leg
             continue
 
-        # MONEYLINE: "[Away] vs/at [Home] Winner" or just team winner
-        m = re.match(
-            r'^(.+?)\s+(?:vs|at)\s+(.+?)\s+winner$',
-            title, re.IGNORECASE
-        )
-        if m:
-            # Winner contracts — need ticker suffix to know which team
-            # e.g. KXMLBGAME-...-PIT = Pittsburgh winner
-            away = m.group(1).strip()
-            home = m.group(2).strip()
-            # Use ticker suffix to determine which team this contract is for
-            suffix = ticker.split('-')[-1].upper()
-
-            # Match suffix to team
-            team = home if any(
-                s in home.upper() for s in [suffix[:3], suffix]
-            ) else away
-
-            ml_line = find_ml(team, sport, lines)
-            if not ml_line:
-                continue
-
-            fair_prob = ml_line.implied_prob
-            if yes_price / 100.0 >= fair_prob:
-                continue
-            edge = (fair_prob - yes_price / 100.0) / (yes_price / 100.0) * 100
-            if edge < 3:
-                continue
-
-            fair_am = implied_prob_to_american(fair_prob)
-            display = f"{team} ML ({sport_s})"
-            event   = f"{ml_line.away_team} @ {ml_line.home_team}"
-            key     = (display.lower(), event)
-            leg     = ComboLeg(
-                kalshi_ticker=ticker, display_name=display,
-                kalshi_price=yes_price, kalshi_prob=yes_price/100.0,
-                fair_prob=fair_prob, fair_american=fair_am,
-                sharp_ml=ml_line.american_odds, sport=sport, event=event,
-                edge_pct=edge,
-            )
-            if key not in best_by_key or yes_price > best_by_key[key].kalshi_price:
-                best_by_key[key] = leg
+        # Skip winner/moneyline contracts — Kalshi prices these accurately
+        # Edge is only in alternate spread lines
 
     matched = list(best_by_key.values())
 
