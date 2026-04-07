@@ -230,18 +230,35 @@ def match_legs(
             if fair_prob < min_fair_prob:
                 continue
 
+            # Filter out illiquid/outlier prices
+            # Valid range: 20c-80c (outside this = either illiquid or near-settled)
+            if kalshi_price < 20 or kalshi_price > 80:
+                continue
+
             kalshi_price = pl["kalshi_price"]
             kalshi_prob  = kalshi_price / 100.0
             edge         = (fair_prob - kalshi_prob) / kalshi_prob * 100 if kalshi_prob > 0 else 0
 
-            # Build display name
+            # Build display name with sport context
             mt = pl["market_type"]
+            sport_short = {
+                "baseball_mlb": "MLB",
+                "basketball_nba": "NBA",
+                "basketball_ncaab": "NCAAB",
+                "americanfootball_nfl": "NFL",
+                "americanfootball_ncaaf": "NCAAF",
+                "icehockey_nhl": "NHL",
+                "soccer_epl": "EPL",
+                "soccer_uefa_champs_league": "UCL",
+                "soccer_usa_mls": "MLS",
+            }.get(line.sport, line.sport.split("_")[-1].upper())
+
             if mt == "moneyline":
-                display = f"{pl['team']} ML"
+                display = f"{pl['team']} ML ({sport_short})"
             elif mt == "spread":
-                display = f"NO {pl['team']} -{pl['line']}" if pl["side"] == "no" else f"{pl['team']} -{pl['line']}"
+                display = f"NO {pl['team']} -{pl['line']} ({sport_short})" if pl["side"] == "no" else f"{pl['team']} -{pl['line']} ({sport_short})"
             elif mt == "total":
-                display = f"{pl.get('direction','over').title()} {pl['line']}"
+                display = f"{pl.get('direction','over').title()} {pl['line']} ({sport_short})"
             else:
                 display = pl["raw"][:30]
 
