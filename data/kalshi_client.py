@@ -132,9 +132,11 @@ class KalshiClient:
             time.sleep(1.0)  # respect rate limit between pages
 
         logger.info(f"Fetched {len(contracts)} Kalshi contracts total")
-        # Log sample prices to verify parsing
-        for c in contracts[:5]:
-            logger.info(f"PRICE CHECK: {c.ticker} | yes_price={c.yes_price:.1f}c | title={c.title[:40]}")
+        # Log non-combo individual markets
+        individuals = [c for c in contracts if not c.ticker.startswith('KXMV')]
+        logger.info(f"Individual markets (non-KXMV): {len(individuals)}")
+        for c in individuals[:10]:
+            logger.info(f"INDIV: {c.ticker[:50]} | {c.yes_price:.1f}c | {c.title[:50]}")
         return contracts
 
     def get_balance(self) -> dict:
