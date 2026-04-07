@@ -213,6 +213,11 @@ def match_legs(contracts: list, lines: list) -> list:
             fair_yes = fair_prob_for_spread(ml_prob, line, sport)
             fair_no  = 1 - fair_yes
 
+            # Sanity check: skip extreme line values where model is unreliable
+            # If YES fair prob < 10% or > 85%, the model is extrapolating too far
+            if fair_yes < 0.10 or fair_yes > 0.85:
+                continue
+
             # Add BOTH sides — both can be underpriced depending on Kalshi's pricing
             no_price = 100 - yes_price
 
@@ -229,7 +234,7 @@ def match_legs(contracts: list, lines: list) -> list:
                 if kalshi_prob >= fair_prob:
                     continue
                 edge = (fair_prob - kalshi_prob) / kalshi_prob * 100
-                if edge < 3:  # minimum 3% edge
+                if edge < 15:  # minimum 15% edge
                     continue
                 fair_am = implied_prob_to_american(fair_prob)
                 event   = f"{ml_line.away_team} @ {ml_line.home_team}"
