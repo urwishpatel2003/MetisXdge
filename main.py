@@ -88,8 +88,9 @@ def run_scan(kalshi, odds, ntfy):
         new_signals.append(signal)
 
     if new_signals:
-        logger.info(f"Alerting {len(new_signals)} new combo(s)")
-        ntfy.send_batch(new_signals)
+        top = new_signals[:10]  # only alert top 10 by odds gap
+        logger.info(f"Alerting {len(top)} of {len(new_signals)} new combo(s)")
+        ntfy.send_batch(top)
         best = new_signals[0]
         logger.info(
             f"Best: {best.n_legs} legs | "
