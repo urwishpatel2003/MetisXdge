@@ -3,7 +3,7 @@
 import os
 
 # ── API Keys ──────────────────────────────────────────────
-ODDS_API_KEY    = os.getenv("ODDS_API_KEY",    "YOUR_ODDS_API_KEY")
+ODDS_API_KEY       = os.getenv("ODDS_API_KEY",       "YOUR_ODDS_API_KEY")
 KALSHI_KEY_ID      = os.getenv("KALSHI_KEY_ID",      "YOUR_KALSHI_KEY_ID")
 KALSHI_PRIVATE_KEY = os.getenv("KALSHI_PRIVATE_KEY", "")
 
@@ -15,22 +15,31 @@ NTFY_BASE_URL = os.getenv("NTFY_BASE_URL", "https://ntfy.sh")
 ODDS_BASE_URL = "https://api.the-odds-api.com/v4"
 SHARP_BOOKS   = ["pinnacle", "betfair"]
 
-# ── Sports to scan ────────────────────────────────────────
+# All active sports — scanner will skip any returning 0 lines
 TARGET_SPORTS = [
     "baseball_mlb",
     "basketball_nba",
-    "basketball_ncaab",
     "americanfootball_nfl",
+    "icehockey_nhl",
+    "soccer_epl",
+    "soccer_uefa_champs_league",
+    "soccer_usa_mls",
+    "tennis_atp_french_open",
+    "basketball_ncaab",
+    "americanfootball_ncaaf",
 ]
 
+# Fetch all market types — h2h, spreads, totals
+TARGET_MARKETS = "h2h,spreads,totals"
+
 # ── Combo Scanner Thresholds ──────────────────────────────
-MIN_ODDS_GAP  = 100    # American odds points gap (Kalshi payout - fair value)
+MIN_ODDS_GAP  = 50     # Lower threshold — cast wide net
 MIN_EV        = 0.05   # Min EV per $1 wagered
-MIN_FAIR_PROB = 0.60   # Only use legs where sharp prob > 60%
-MAX_LEGS      = 4      # Max legs per combo
+MIN_FAIR_PROB = 0.55   # Min fair probability per leg
+MAX_LEGS      = 4
 
 # ── Scheduler ─────────────────────────────────────────────
-SCAN_INTERVAL_SECONDS = 300  # 5 min — Kalshi rate limit is 10 req/s basic tier
+SCAN_INTERVAL_SECONDS = 300
 
 # ── Database ──────────────────────────────────────────────
 DB_PATH = "data/metisxdge.db"
