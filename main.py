@@ -14,6 +14,9 @@ from config.settings import (
     MAX_LEGS, SCAN_INTERVAL_SECONDS,
     LOG_LEVEL, LOG_FILE, SSL_VERIFY
 )
+os.makedirs("logs", exist_ok=True)
+os.makedirs("data", exist_ok=True)
+
 from data.kalshi_client import KalshiClient
 from data.odds_client import OddsClient
 from alerts.ntfy import NtfyAlerter
