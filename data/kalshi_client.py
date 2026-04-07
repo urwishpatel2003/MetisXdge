@@ -1,8 +1,6 @@
 # data/kalshi_client.py
 """
-Kalshi REST API Client — 2026
-Base URL: https://trading-api.kalshi.com/trade-api/v2
-Auth: email/password → JWT token (valid ~24hrs, auto-refreshes on 401)
+Kalshi REST API Client — API Key Auth (2026)
 """
 
 import requests
@@ -17,35 +15,17 @@ BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
 
 
 class KalshiClient:
-    def __init__(self, email: str, password: str, ssl_verify: bool = True):
-        self.email      = email
-        self.password   = password
-        self.ssl_verify = ssl_verify
-        self.token      = None
-        self.session    = requests.Session()
+    def __init__(self, api_key: str, ssl_verify: bool = True):
+        self.session = requests.Session()
         self.session.verify = ssl_verify
-        self._login()
-
-    def _login(self):
-        resp = self.session.post(
-            f"{BASE_URL}/login",
-            json={"email": self.email, "password": self.password},
-            headers={"Content-Type": "application/json"},
-        )
-        resp.raise_for_status()
-        self.token = resp.json()["token"]
         self.session.headers.update({
-            "Authorization": f"Bearer {self.token}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type":  "application/json",
         })
-        logger.info("Kalshi auth successful")
+        logger.info("Kalshi client initialized with API key auth")
 
     def _get(self, endpoint: str, params: dict = {}) -> dict:
         resp = self.session.get(f"{BASE_URL}/{endpoint}", params=params)
-        if resp.status_code == 401:
-            logger.info("Token expired — re-authenticating...")
-            self._login()
-            resp = self.session.get(f"{BASE_URL}/{endpoint}", params=params)
         resp.raise_for_status()
         return resp.json()
 
@@ -56,9 +36,8 @@ class KalshiClient:
         return self._get("markets", params)
 
     def get_sports_markets(self) -> list[KalshiContract]:
-        """Fetch all open markets and return as KalshiContract objects"""
         contracts = []
-        cursor    = None
+        cursor = None
 
         while True:
             data    = self.get_markets(limit=200, cursor=cursor)
@@ -92,21 +71,6 @@ class KalshiClient:
 
         logger.info(f"Fetched {len(contracts)} Kalshi contracts")
         return contracts
-
-    def place_order(self, ticker: str, side: str, count: int, price: int, action: str = "buy") -> dict:
-        payload = {
-            "ticker": ticker,
-            "side":   side.lower(),
-            "count":  count,
-            "yes_price" if side.lower() == "yes" else "no_price": price,
-            "action": action,
-            "type":   "limit",
-            "client_order_id": f"metis_{ticker}_{int(datetime.utcnow().timestamp())}",
-        }
-        resp = self.session.post(f"{BASE_URL}/portfolio/orders", json=payload)
-        resp.raise_for_status()
-        logger.info(f"Order placed: {ticker} {side} {count}x @ {price}c")
-        return resp.json()
 
     def get_balance(self) -> dict:
         return self._get("portfolio/balance")
