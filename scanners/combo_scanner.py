@@ -187,6 +187,14 @@ def match_legs(
                 continue
 
             fair_prob = line.implied_prob
+
+            # Only include legs where fair American odds are between -200 and +150
+            # This targets realistic favorites — not near-certainties or coin flips
+            from core.fair_value import implied_prob_to_american
+            fair_am = implied_prob_to_american(fair_prob)
+            if fair_am < -200 or fair_am > 150:
+                continue
+
             if fair_prob < min_fair_prob:
                 continue
 
@@ -262,8 +270,14 @@ def scan_combos(
             evaluated += 1
             legs = list(combo)
 
-            # No duplicate events
-            if len(set(leg.event for leg in legs)) != n:
+            # No duplicate events (same game can't appear twice)
+            events = [leg.event for leg in legs]
+            if len(set(events)) != n:
+                continue
+
+            # Also skip if same team appears twice
+            teams = [leg.display_name for leg in legs]
+            if len(set(teams)) != n:
                 continue
 
             try:
