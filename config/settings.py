@@ -4,7 +4,8 @@ import os
 
 # ── API Keys ──────────────────────────────────────────────
 ODDS_API_KEY    = os.getenv("ODDS_API_KEY",    "YOUR_ODDS_API_KEY")
-KALSHI_API_KEY  = os.getenv("KALSHI_API_KEY", "YOUR_KALSHI_API_KEY")
+KALSHI_KEY_ID      = os.getenv("KALSHI_KEY_ID",      "YOUR_KALSHI_KEY_ID")
+KALSHI_PRIVATE_KEY = os.getenv("KALSHI_PRIVATE_KEY", "")
 
 # ── ntfy.sh ───────────────────────────────────────────────
 NTFY_TOPIC    = os.getenv("NTFY_TOPIC",    "metisxdge-changeme123")
