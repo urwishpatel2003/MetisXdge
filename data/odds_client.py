@@ -114,9 +114,10 @@ class OddsClient:
     def get_sharp_lines(
         self,
         sport: str,
-        sharp_books: list = None
+        sharp_books: list = None,
+        markets: str = "h2h,spreads,totals"
     ) -> list[OddsLine]:
         """Convenience method for just sharp book lines"""
         if sharp_books is None:
             sharp_books = ["pinnacle", "betfair"]
-        return self.get_odds(sport, books=sharp_books)
+        return self.get_odds(sport, markets=markets, books=sharp_books)
