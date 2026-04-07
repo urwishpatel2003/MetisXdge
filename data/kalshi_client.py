@@ -100,7 +100,11 @@ class KalshiClient:
 
             for m in markets:
                 try:
-                    yes_ask_raw = m.get("yes_ask") or m.get("yes_bid") or m.get("last_price") or "0.50"
+                    # Log all price fields for first few markets to diagnose
+                    if len(contracts) < 3:
+                        price_fields = {k: v for k, v in m.items() if any(x in k.lower() for x in ["price", "ask", "bid", "cost", "payout"])}
+                        logger.info(f"FIELDS: {m.get('ticker','')[:40]} -> {price_fields}")
+                    yes_ask_raw = m.get("yes_ask") or m.get("yes_bid") or m.get("last_price") or m.get("yes_price") or "0.50"
                     yes_ask_val = float(str(yes_ask_raw))
                     # Kalshi prices are dollar strings (0.0-1.0) since March 2026
                     yes_ask = yes_ask_val * 100 if yes_ask_val <= 1.0 else yes_ask_val
