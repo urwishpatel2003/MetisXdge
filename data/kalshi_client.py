@@ -100,8 +100,10 @@ class KalshiClient:
 
             for m in markets:
                 try:
-                    yes_ask_raw = m.get("yes_ask", "0.50") or "0.50"
-                    yes_ask = float(str(yes_ask_raw)) * 100
+                    yes_ask_raw = m.get("yes_ask") or m.get("yes_bid") or m.get("last_price") or "0.50"
+                    yes_ask_val = float(str(yes_ask_raw))
+                    # Kalshi prices are dollar strings (0.0-1.0) since March 2026
+                    yes_ask = yes_ask_val * 100 if yes_ask_val <= 1.0 else yes_ask_val
                     no_ask  = 100 - yes_ask
                     close_time_str = m.get("close_time", "")
                     close_time = (
@@ -129,6 +131,9 @@ class KalshiClient:
             time.sleep(1.0)  # respect rate limit between pages
 
         logger.info(f"Fetched {len(contracts)} Kalshi contracts total")
+        # Log sample prices to verify parsing
+        for c in contracts[:5]:
+            logger.info(f"PRICE CHECK: {c.ticker} | yes_price={c.yes_price:.1f}c | title={c.title[:40]}")
         return contracts
 
     def get_balance(self) -> dict:
