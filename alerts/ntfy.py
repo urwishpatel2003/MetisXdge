@@ -27,7 +27,7 @@ def format_batch_notification(signals: list) -> dict:
         seen.add(key)
 
         # Clean team names from legs
-        teams = " + ".join(leg.team_name for leg in s.legs)
+        teams = " + ".join(leg.display_name for leg in s.legs)
         lines.append(_safe(
             f"[{s.n_legs}L] {teams}\n"
             f"  Kalshi {_fmt(s.kalshi_american)} | Fair {_fmt(s.fair_american)} | "
@@ -45,13 +45,13 @@ def format_batch_notification(signals: list) -> dict:
 
 
 def format_combo_notification(signal) -> dict:
-    teams = " + ".join(leg.team_name for leg in signal.legs)
+    teams = " + ".join(leg.display_name for leg in signal.legs)
     title = _safe(f"[{signal.n_legs}L] {teams} | +{signal.odds_gap}pt gap")
     body  = _safe(
         f"Kalshi: {_fmt(signal.kalshi_american)} | Fair: {_fmt(signal.fair_american)}\n"
         f"EV per $1: ${signal.ev_per_dollar:.2f} | Edge: {signal.edge_pct:.1f}%\n\n"
         + "\n".join(
-            f"  {leg.team_name}: {leg.kalshi_price:.0f}c (fair {leg.fair_prob:.1%})"
+            f"  {leg.display_name}: {leg.kalshi_price:.0f}c (fair {leg.fair_prob:.1%})"
             for leg in signal.legs
         )
         + f"\n\n{datetime.utcnow().strftime('%H:%M UTC')}"
