@@ -61,7 +61,7 @@ def run_scan(kalshi, odds, ntfy):
         logger.warning("Insufficient data — skipping scan")
         return
 
-    matched = match_legs(contracts, all_lines, min_fair_prob=MIN_FAIR_PROB)
+    matched = match_legs(contracts, all_lines)
 
     if len(matched) < 2:
         logger.warning(f"Only {len(matched)} matched legs — need at least 2 for combos")
