@@ -1,9 +1,4 @@
 # alerts/ntfy.py
-"""
-ntfy.sh Push Notification Alerter — Combo Edition
-Formats ComboSignal alerts clearly showing the odds gap.
-"""
-
 import requests
 import logging
 from datetime import datetime
@@ -16,15 +11,15 @@ def _fmt(odds: int) -> str:
     return f"+{odds}" if odds > 0 else str(odds)
 
 
+def _clean(text: str) -> str:
+    """Remove non-latin characters that break ntfy encoding"""
+    return text.encode("latin-1", errors="replace").decode("latin-1")
+
+
 def format_combo_notification(signal) -> dict:
-    """
-    Format a ComboSignal as an ntfy push notification.
-    Leads with the odds gap — that's the number that matters.
-    """
-    n = signal.n_legs
+    n   = signal.n_legs
     gap = signal.odds_gap
 
-    # Priority based on gap size
     if gap >= 200:
         priority = "urgent"
         tags = "rotating_light,moneybag"
@@ -35,25 +30,23 @@ def format_combo_notification(signal) -> dict:
         priority = "default"
         tags = "bar_chart"
 
-    title = (
+    title = _clean(
         f"{n}-leg combo | Kalshi {_fmt(signal.kalshi_american)} vs Fair {_fmt(signal.fair_american)} "
         f"(+{gap} pts gap)"
     )
 
-    # Build leg lines
     leg_lines = []
     for i, leg in enumerate(signal.legs, 1):
-        leg_lines.append(
+        leg_lines.append(_clean(
             f"  {i}. {leg.kalshi_title[:45]}\n"
-            f"     YES @ {leg.kalshi_price:.0f}c | Sharp: {_fmt(leg.sharp_odds)} ({leg.sharp_book})\n"
-            f"     Fair prob: {leg.fair_prob:.1%} | Kalshi prob: {leg.kalshi_prob:.1%}"
-        )
+            f"     YES @ {leg.kalshi_price:.0f}c | Sharp: {_fmt(leg.sharp_odds)}\n"
+            f"     Fair: {leg.fair_prob:.1%} | Kalshi: {leg.kalshi_prob:.1%}"
+        ))
 
-    body = (
+    body = _clean(
         f"Fair prob: {signal.fair_combined_prob:.1%} | "
         f"Kalshi prob: {signal.kalshi_combined_prob:.1%}\n"
-        f"EV per $1: ${signal.ev_per_dollar:.3f} | "
-        f"Edge: {signal.edge_pct:.1f}%\n"
+        f"EV per $1: ${signal.ev_per_dollar:.3f} | Edge: {signal.edge_pct:.1f}%\n"
         f"Sports: {', '.join(signal.sports)}\n\n"
         + "\n".join(leg_lines)
         + f"\n\n{datetime.utcnow().strftime('%H:%M UTC')}"
@@ -63,20 +56,18 @@ def format_combo_notification(signal) -> dict:
 
 
 def format_batch_notification(signals: list) -> dict:
-    """Batch summary when multiple combos found in same scan"""
-    best = signals[0]  # already sorted by odds_gap desc
+    best  = signals[0]
     lines = []
     for s in signals[:8]:
-        lines.append(
+        lines.append(_clean(
             f"[{s.n_legs}L] {_fmt(s.kalshi_american)} vs {_fmt(s.fair_american)} "
-            f"| +{s.odds_gap}pt gap | EV ${s.ev_per_dollar:.2f}"
-        )
-
+            f"| +{s.odds_gap}pt | EV ${s.ev_per_dollar:.2f}"
+        ))
     return {
-        "title": f"MetisXdge — {len(signals)} combo(s) | Best: +{best.odds_gap}pt gap",
-        "body": "\n".join(lines) + f"\n{datetime.utcnow().strftime('%H:%M UTC')}",
-        "priority": "high" if best.odds_gap >= 150 else "default",
-        "tags": "bar_chart,moneybag",
+        "title": _clean(f"MetisXdge: {len(signals)} combo(s) | Best +{best.odds_gap}pt gap"),
+        "body":  "\n".join(lines) + f"\n{datetime.utcnow().strftime('%H:%M UTC')}",
+        "priority": "urgent" if best.odds_gap >= 200 else "high",
+        "tags": "moneybag,bar_chart",
     }
 
 
@@ -93,7 +84,7 @@ class NtfyAlerter:
                     "Title":        payload["title"],
                     "Priority":     payload["priority"],
                     "Tags":         payload["tags"],
-                    "Content-Type": "text/plain",
+                    "Content-Type": "text/plain; charset=utf-8",
                 },
                 data=payload["body"].encode("utf-8"),
                 timeout=10,
@@ -117,8 +108,8 @@ class NtfyAlerter:
 
     def test(self) -> bool:
         return self._send({
-            "title": "MetisXdge online",
-            "body":  "Combo scanner is running. Watching for mispriced Kalshi combos.",
+            "title":    "MetisXdge online",
+            "body":     "Combo scanner is running.",
             "priority": "default",
-            "tags": "white_check_mark",
+            "tags":     "white_check_mark",
         })
