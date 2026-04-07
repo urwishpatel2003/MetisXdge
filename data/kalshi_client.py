@@ -20,20 +20,13 @@ from core.models import KalshiContract
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+MAX_PAGES = 10  # cap at 10 pages = 2000 markets max
 
 
 def _fix_pem(pem: str) -> str:
-    """
-    Reconstruct a valid PEM from whatever Railway gives us.
-    Railway strips newlines so the env var arrives as raw base64.
-    """
     pem = pem.strip().replace("\\n", "\n")
-
-    # Already has headers — just return it
     if "-----BEGIN" in pem:
         return pem
-
-    # Raw base64 body with no headers — wrap it
     body = pem.replace(" ", "").replace("\n", "")
     body_lines = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
     return f"-----BEGIN RSA PRIVATE KEY-----\n{body_lines}\n-----END RSA PRIVATE KEY-----"
@@ -96,10 +89,14 @@ class KalshiClient:
     def get_sports_markets(self) -> list[KalshiContract]:
         contracts = []
         cursor    = None
+        page      = 0
 
-        while True:
+        while page < MAX_PAGES:
+            page += 1
+            logger.info(f"Fetching markets page {page}...")
             data    = self.get_markets(limit=200, cursor=cursor)
             markets = data.get("markets", [])
+            logger.info(f"Page {page}: got {len(markets)} markets")
 
             for m in markets:
                 try:
@@ -126,10 +123,12 @@ class KalshiClient:
 
             cursor = data.get("cursor")
             if not cursor or not markets:
+                logger.info(f"Done paginating after {page} pages")
                 break
-            time.sleep(0.5)  # avoid 429 rate limit between pages
 
-        logger.info(f"Fetched {len(contracts)} Kalshi contracts")
+            time.sleep(1.0)  # respect rate limit between pages
+
+        logger.info(f"Fetched {len(contracts)} Kalshi contracts total")
         return contracts
 
     def get_balance(self) -> dict:
