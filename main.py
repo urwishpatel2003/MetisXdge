@@ -9,7 +9,7 @@ from config.settings import (
     ODDS_API_KEY, ODDS_BASE_URL,
     KALSHI_KEY_ID, KALSHI_PRIVATE_KEY,
     NTFY_TOPIC, NTFY_BASE_URL,
-    TARGET_SPORTS, SHARP_BOOKS,
+    TARGET_SPORTS, SHARP_BOOKS, TARGET_MARKETS,
     MIN_ODDS_GAP, MIN_EV, MIN_FAIR_PROB,
     MAX_LEGS, SCAN_INTERVAL_SECONDS,
     LOG_LEVEL, LOG_FILE, SSL_VERIFY
@@ -50,7 +50,7 @@ def run_scan(kalshi, odds, ntfy):
     all_lines = []
     for sport in TARGET_SPORTS:
         try:
-            lines = odds.get_sharp_lines(sport, SHARP_BOOKS)
+            lines = odds.get_sharp_lines(sport, SHARP_BOOKS, markets=TARGET_MARKETS)
             all_lines.extend(lines)
         except Exception as e:
             logger.warning(f"Odds fetch failed for {sport}: {e}")
