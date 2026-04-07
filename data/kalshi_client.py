@@ -1,7 +1,7 @@
 # data/kalshi_client.py
 """
 Kalshi REST API Client — RSA-PSS Auth (2026)
-Production URL: https://api.elections.kalshi.com/trade-api/v2
+Targets individual game markets: KXMLBGAME, KXNBAGAME, KXNHLGAME etc.
 """
 
 import time
@@ -19,15 +19,35 @@ from core.models import KalshiContract
 
 logger = logging.getLogger(__name__)
 
-BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-MAX_PAGES = 20  # 4000 markets max to find enough liquid ones
+BASE_URL  = "https://api.elections.kalshi.com/trade-api/v2"
+MAX_PAGES = 20
+
+# Individual game market prefixes — these are the real tradeable markets
+GAME_PREFIXES = (
+    'KXMLBGAME',   # MLB games
+    'KXNBAGAME',   # NBA games
+    'KXNHLGAME',   # NHL games
+    'KXNFLGAME',   # NFL games
+    'KXSOCCER',    # Soccer
+    'KXNCAAB',     # College basketball
+    'KXNCAAF',     # College football
+)
 
 
 def _fix_pem(pem: str) -> str:
-    pem = pem.strip().replace("\\n", "\n")
+    """Reconstruct PEM from base64 or mangled env var."""
+    import base64 as b64
+    pem = pem.strip()
+    try:
+        decoded = b64.b64decode(pem).decode("utf-8")
+        if "-----BEGIN" in decoded:
+            return decoded
+    except Exception:
+        pass
+    pem = pem.replace("\\n", "\n")
     if "-----BEGIN" in pem:
         return pem
-    body = pem.replace(" ", "").replace("\n", "")
+    body       = pem.replace(" ", "").replace("\n", "")
     body_lines = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
     return f"-----BEGIN RSA PRIVATE KEY-----\n{body_lines}\n-----END RSA PRIVATE KEY-----"
 
@@ -42,30 +62,24 @@ class KalshiClient:
         pem = _fix_pem(private_key_pem)
         logger.info(f"PEM header: {pem[:40]}")
         self.private_key = serialization.load_pem_private_key(
-            pem.encode("utf-8"),
-            password=None,
-            backend=default_backend()
+            pem.encode("utf-8"), password=None, backend=default_backend()
         )
         logger.info("Kalshi client initialized with RSA-PSS auth")
 
     def _sign(self, timestamp: str, method: str, path: str) -> str:
-        message = f"{timestamp}{method}{path}"
+        message   = f"{timestamp}{method}{path}"
         signature = self.private_key.sign(
             message.encode("utf-8"),
-            padding.PSS(
-                mgf=padding.MGF1(hashes.SHA256()),
-                salt_length=padding.PSS.DIGEST_LENGTH
-            ),
+            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
             hashes.SHA256()
         )
         return base64.b64encode(signature).decode("utf-8")
 
     def _headers(self, method: str, path: str) -> dict:
         timestamp = str(int(time.time() * 1000))
-        signature = self._sign(timestamp, method.upper(), path)
         return {
             "KALSHI-ACCESS-KEY":       self.api_key_id,
-            "KALSHI-ACCESS-SIGNATURE": signature,
+            "KALSHI-ACCESS-SIGNATURE": self._sign(timestamp, method.upper(), path),
             "KALSHI-ACCESS-TIMESTAMP": timestamp,
             "Content-Type":            "application/json",
         }
@@ -87,9 +101,14 @@ class KalshiClient:
         return self._get("markets", params)
 
     def get_sports_markets(self) -> list[KalshiContract]:
+        """
+        Fetch individual game markets only (KXMLBGAME, KXNBAGAME, etc.)
+        Skip combo/bundle markets (KXMV*).
+        """
         contracts = []
         cursor    = None
         page      = 0
+        total_seen = 0
 
         while page < MAX_PAGES:
             page += 1
@@ -97,22 +116,31 @@ class KalshiClient:
             data    = self.get_markets(limit=200, cursor=cursor)
             markets = data.get("markets", [])
             logger.info(f"Page {page}: got {len(markets)} markets")
+            total_seen += len(markets)
 
             for m in markets:
+                ticker = m.get("ticker", "")
+
+                # Only individual game markets
+                if not any(ticker.startswith(p) for p in GAME_PREFIXES):
+                    continue
+
                 try:
-                    # Use dollar fields (March 2026 migration)
-                    yes_ask_dollars = m.get("yes_ask_dollars") or m.get("yes_bid_dollars") or m.get("last_price_dollars")
-                    if yes_ask_dollars is None or float(yes_ask_dollars) == 0:
-                        continue  # skip markets with no liquidity
-                    yes_ask = float(yes_ask_dollars) * 100  # convert to cents
+                    # March 2026: prices are dollar strings
+                    yes_ask_raw = m.get("yes_ask_dollars") or m.get("yes_bid_dollars") or m.get("last_price_dollars")
+                    if yes_ask_raw is None or float(yes_ask_raw) == 0:
+                        continue
+
+                    yes_ask = float(yes_ask_raw) * 100  # to cents
                     no_ask  = 100 - yes_ask
+
                     close_time_str = m.get("close_time", "")
                     close_time = (
                         datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
                         if close_time_str else datetime.utcnow()
                     )
                     contracts.append(KalshiContract(
-                        ticker        = m.get("ticker", ""),
+                        ticker        = ticker,
                         title         = m.get("title", ""),
                         yes_price     = yes_ask,
                         no_price      = no_ask,
@@ -122,21 +150,18 @@ class KalshiClient:
                         close_time    = close_time,
                     ))
                 except Exception as e:
-                    logger.warning(f"Skipping market {m.get('ticker')}: {e}")
+                    logger.warning(f"Skipping {ticker}: {e}")
 
             cursor = data.get("cursor")
             if not cursor or not markets:
-                logger.info(f"Done paginating after {page} pages")
+                logger.info(f"Done after {page} pages ({total_seen} total markets seen)")
                 break
 
-            time.sleep(1.0)  # respect rate limit between pages
+            time.sleep(0.5)
 
-        logger.info(f"Fetched {len(contracts)} Kalshi contracts total")
-        # Log non-combo individual markets
-        individuals = [c for c in contracts if not c.ticker.startswith('KXMV')]
-        logger.info(f"Individual markets (non-KXMV): {len(individuals)}")
-        for c in individuals[:10]:
-            logger.info(f"INDIV: {c.ticker[:50]} | {c.yes_price:.1f}c | {c.title[:50]}")
+        logger.info(f"Fetched {len(contracts)} individual game contracts")
+        for c in contracts[:5]:
+            logger.info(f"  {c.ticker} | {c.yes_price:.1f}c | {c.title[:50]}")
         return contracts
 
     def get_balance(self) -> dict:
