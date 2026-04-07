@@ -172,7 +172,11 @@ def match_legs(
     best_by_key = {}  # (team, event) -> best leg
 
     for contract in contracts:
-        # Only h2h moneyline markets — strict price range 25-75c
+        # Skip Kalshi combo/bundle markets — only individual contracts
+        if contract.ticker.startswith("KXMV"):
+            continue
+
+        # Strict price range 30-70c
         if contract.yes_price < 30 or contract.yes_price > 70:
             continue
 
