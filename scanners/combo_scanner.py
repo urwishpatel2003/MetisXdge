@@ -227,15 +227,14 @@ def match_legs(
             if pl["side"] == "no":
                 fair_prob = 1 - fair_prob
 
-            if fair_prob < min_fair_prob:
-                continue
+            kalshi_price = pl["kalshi_price"]
 
-            # Filter out illiquid/outlier prices
-            # Valid range: 20c-80c (outside this = either illiquid or near-settled)
+            # Filter out illiquid/outlier prices (20c-80c sweet spot)
             if kalshi_price < 20 or kalshi_price > 80:
                 continue
 
-            kalshi_price = pl["kalshi_price"]
+            if fair_prob < min_fair_prob:
+                continue
             kalshi_prob  = kalshi_price / 100.0
             edge         = (fair_prob - kalshi_prob) / kalshi_prob * 100 if kalshi_prob > 0 else 0
 
