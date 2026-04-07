@@ -24,23 +24,19 @@ BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 def _fix_pem(pem: str) -> str:
     """
-    Fix PEM key that had newlines stripped when stored in env var.
-    Handles both literal \\n and space-separated base64 blocks.
+    Reconstruct a valid PEM from whatever Railway gives us.
+    Railway strips newlines so the env var arrives as raw base64.
     """
-    pem = pem.strip()
-    # If literal \n strings present, replace them
-    pem = pem.replace("\\n", "\n")
-    # If still no newlines, the header/footer and body are space-separated
-    if "\n" not in pem:
-        for header in ["-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"]:
-            if header in pem:
-                footer = header.replace("BEGIN", "END")
-                body = pem.replace(header, "").replace(footer, "").strip()
-                # Split body into 64-char lines
-                body_lines = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
-                pem = f"{header}\n{body_lines}\n{footer}"
-                break
-    return pem
+    pem = pem.strip().replace("\\n", "\n")
+
+    # Already has headers — just return it
+    if "-----BEGIN" in pem:
+        return pem
+
+    # Raw base64 body with no headers — wrap it
+    body = pem.replace(" ", "").replace("\n", "")
+    body_lines = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
+    return f"-----BEGIN RSA PRIVATE KEY-----\n{body_lines}\n-----END RSA PRIVATE KEY-----"
 
 
 class KalshiClient:
@@ -51,6 +47,7 @@ class KalshiClient:
         self.session.verify = ssl_verify
 
         pem = _fix_pem(private_key_pem)
+        logger.info(f"PEM header: {pem[:40]}")
         self.private_key = serialization.load_pem_private_key(
             pem.encode("utf-8"),
             password=None,
