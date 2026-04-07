@@ -167,6 +167,14 @@ def match_legs(contracts: list, lines: list) -> list:
         if m:
             team   = m.group(1).strip()
             line   = float(m.group(2))
+
+            # Cap line values — only realistic alternate lines
+            # MLB: 1.5-4.5, NHL: 1.5-2.5, NBA: 1.5-8.5
+            max_lines = {'baseball_mlb': 4.5, 'icehockey_nhl': 2.5, 'basketball_nba': 8.5}
+            sport_tmp = ticker_sport(ticker)
+            if line > max_lines.get(sport_tmp, 5.0):
+                continue
+
             ml_line = find_ml(team, sport, lines)
             if not ml_line:
                 continue
