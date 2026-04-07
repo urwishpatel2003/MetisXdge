@@ -79,17 +79,23 @@ def run_scan(kalshi, odds, ntfy):
         logger.info("No mispriced combos found this scan")
         return
 
+    # Dedup by sorted tickers AND by odds signature
     new_signals = []
+    seen_fps    = set()
+    seen_odds   = set()
     for signal in signals:
-        fp = combo_fingerprint(signal)
-        if fp in alerted_combos:
+        fp       = combo_fingerprint(signal)
+        odds_key = f"{signal.kalshi_american}_{signal.fair_american}_{signal.n_legs}"
+        if fp in alerted_combos or fp in seen_fps or odds_key in seen_odds:
             continue
+        seen_fps.add(fp)
+        seen_odds.add(odds_key)
         alerted_combos.add(fp)
         new_signals.append(signal)
 
     if new_signals:
-        top = new_signals[:10]  # only alert top 10 by odds gap
-        logger.info(f"Alerting {len(top)} of {len(new_signals)} new combo(s)")
+        top = new_signals[:5]  # top 5 unique combos
+        logger.info(f"Alerting {len(top)} unique of {len(signals)} total combo(s)")
         ntfy.send_batch(top)
         best = new_signals[0]
         logger.info(
