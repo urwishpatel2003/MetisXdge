@@ -81,20 +81,48 @@ def sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
 
+# Explicit team name mappings for ambiguous cases
+TEAM_MAP = {
+    'chicago ws':    'chicago white sox',
+    'chicago c':     'chicago cubs',
+    'new york y':    'new york yankees',
+    'new york m':    'new york mets',
+    'los angeles d': 'los angeles dodgers',
+    'los angeles a': 'los angeles angels',
+    'los angeles l': 'los angeles lakers',
+    'los angeles c': 'los angeles clippers',
+    'los angeles k': 'los angeles kings',
+    'new york r':    'new york rangers',
+    'new york i':    'new york islanders',
+    'st. louis':     'st. louis cardinals',
+}
+
+
 def find_ml(team: str, sport: str, lines: list) -> Optional[OddsLine]:
     """Find the moneyline for a team from sharp lines."""
-    best, bs = None, 0.55
     team_l   = team.lower().strip()
-    words    = [w for w in team_l.split() if len(w) > 3]
+    # Apply explicit mapping if available
+    resolved = TEAM_MAP.get(team_l, team_l)
 
+    best, bs = None, 0.55
     for line in lines:
         if line.market_key != 'h2h':
             continue
         if sport and line.sport != sport:
             continue
         outcome_l = line.outcome.lower()
-        word_hit  = any(w in outcome_l for w in words)
-        score     = max(sim(team_l, outcome_l), 0.8 if word_hit else 0.0)
+
+        # Score against resolved name
+        words    = [w for w in resolved.split() if len(w) > 3]
+        word_hit = any(w in outcome_l for w in words)
+        score    = max(sim(resolved, outcome_l), 0.85 if word_hit else 0.0)
+
+        # Penalize if original ambiguous word matches wrong team
+        if team_l != resolved and team_l.split()[0] in outcome_l:
+            # e.g. 'chicago' matches Cubs when we want White Sox
+            if resolved not in outcome_l and sim(resolved, outcome_l) < 0.6:
+                score = 0.0
+
         if score > bs:
             bs, best = score, line
 
