@@ -23,15 +23,15 @@ BASE_URL  = "https://api.elections.kalshi.com/trade-api/v2"
 MAX_PAGES = 20
 
 # Individual game market prefixes — these are the real tradeable markets
-GAME_PREFIXES = (
-    'KXMLBGAME',   # MLB games
-    'KXNBAGAME',   # NBA games
-    'KXNHLGAME',   # NHL games
-    'KXNFLGAME',   # NFL games
-    'KXSOCCER',    # Soccer
-    'KXNCAAB',     # College basketball
-    'KXNCAAF',     # College football
-)
+# Series tickers for individual game markets (from URL structure)
+GAME_SERIES = [
+    'kxmlbgame',    # MLB: /markets/kxmlbgame/
+    'kxnbagame',    # NBA
+    'kxnhlgame',    # NHL
+    'kxnflgame',    # NFL
+    'kxsoccer',     # Soccer
+    'kxncaabgame',  # NCAAB
+]
 
 
 def _fix_pem(pem: str) -> str:
@@ -100,52 +100,40 @@ class KalshiClient:
             params["cursor"] = cursor
         return self._get("markets", params)
 
-    def get_sports_markets(self) -> list[KalshiContract]:
-        """
-        Fetch individual game markets only (KXMLBGAME, KXNBAGAME, etc.)
-        Skip combo/bundle markets (KXMV*).
-        """
+    def get_series_markets(self, series_ticker: str) -> list[KalshiContract]:
+        """Fetch all open markets for a specific series (e.g. kxmlbgame)"""
         contracts = []
         cursor    = None
-        page      = 0
-        total_seen = 0
 
-        while page < MAX_PAGES:
-            page += 1
-            logger.info(f"Fetching markets page {page}...")
-            data    = self.get_markets(limit=200, cursor=cursor)
+        while True:
+            params = {"status": "open", "limit": 200, "series_ticker": series_ticker}
+            if cursor:
+                params["cursor"] = cursor
+
+            path = "/trade-api/v2/markets"
+            resp = self.session.get(
+                f"{BASE_URL}/markets",
+                params=params,
+                headers=self._headers("GET", path)
+            )
+            resp.raise_for_status()
+            data    = resp.json()
             markets = data.get("markets", [])
-            logger.info(f"Page {page}: got {len(markets)} markets")
-            total_seen += len(markets)
 
             for m in markets:
-                ticker = m.get("ticker", "")
-
-                # Log unique prefixes from first page to identify correct format
-                if page == 1 and len(contracts) < 5:
-                    prefix = ticker[:12]
-                    logger.info(f"TICKER SAMPLE: {ticker[:60]} | title: {m.get('title','')[:40]}")
-
-                # Only individual game markets
-                if not any(ticker.startswith(p) for p in GAME_PREFIXES):
-                    continue
-
                 try:
-                    # March 2026: prices are dollar strings
                     yes_ask_raw = m.get("yes_ask_dollars") or m.get("yes_bid_dollars") or m.get("last_price_dollars")
                     if yes_ask_raw is None or float(yes_ask_raw) == 0:
                         continue
-
-                    yes_ask = float(yes_ask_raw) * 100  # to cents
+                    yes_ask = float(yes_ask_raw) * 100
                     no_ask  = 100 - yes_ask
-
                     close_time_str = m.get("close_time", "")
                     close_time = (
                         datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
                         if close_time_str else datetime.utcnow()
                     )
                     contracts.append(KalshiContract(
-                        ticker        = ticker,
+                        ticker        = m.get("ticker", ""),
                         title         = m.get("title", ""),
                         yes_price     = yes_ask,
                         no_price      = no_ask,
@@ -155,18 +143,30 @@ class KalshiClient:
                         close_time    = close_time,
                     ))
                 except Exception as e:
-                    logger.warning(f"Skipping {ticker}: {e}")
+                    logger.warning(f"Skipping {m.get('ticker')}: {e}")
 
             cursor = data.get("cursor")
             if not cursor or not markets:
-                logger.info(f"Done after {page} pages ({total_seen} total markets seen)")
                 break
+            time.sleep(0.3)
 
+        return contracts
+
+    def get_sports_markets(self) -> list[KalshiContract]:
+        """Fetch individual game markets via series endpoint"""
+        contracts = []
+        for series in GAME_SERIES:
+            try:
+                series_contracts = self.get_series_markets(series)
+                logger.info(f"Series {series}: {len(series_contracts)} contracts")
+                for c in series_contracts[:2]:
+                    logger.info(f"  SAMPLE: {c.ticker} | {c.yes_price:.1f}c | {c.title[:50]}")
+                contracts.extend(series_contracts)
+            except Exception as e:
+                logger.warning(f"Failed to fetch series {series}: {e}")
             time.sleep(0.5)
 
-        logger.info(f"Fetched {len(contracts)} individual game contracts")
-        for c in contracts[:5]:
-            logger.info(f"  {c.ticker} | {c.yes_price:.1f}c | {c.title[:50]}")
+        logger.info(f"Total: {len(contracts)} individual game contracts")
         return contracts
 
     def get_balance(self) -> dict:
