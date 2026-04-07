@@ -20,7 +20,7 @@ from core.models import KalshiContract
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
-MAX_PAGES = 10  # cap at 10 pages = 2000 markets max
+MAX_PAGES = 20  # 4000 markets max to find enough liquid ones
 
 
 def _fix_pem(pem: str) -> str:
@@ -100,14 +100,11 @@ class KalshiClient:
 
             for m in markets:
                 try:
-                    # Log all price fields for first few markets to diagnose
-                    if len(contracts) < 3:
-                        price_fields = {k: v for k, v in m.items() if any(x in k.lower() for x in ["price", "ask", "bid", "cost", "payout"])}
-                        logger.info(f"FIELDS: {m.get('ticker','')[:40]} -> {price_fields}")
-                    yes_ask_raw = m.get("yes_ask") or m.get("yes_bid") or m.get("last_price") or m.get("yes_price") or "0.50"
-                    yes_ask_val = float(str(yes_ask_raw))
-                    # Kalshi prices are dollar strings (0.0-1.0) since March 2026
-                    yes_ask = yes_ask_val * 100 if yes_ask_val <= 1.0 else yes_ask_val
+                    # Use dollar fields (March 2026 migration)
+                    yes_ask_dollars = m.get("yes_ask_dollars") or m.get("yes_bid_dollars") or m.get("last_price_dollars")
+                    if yes_ask_dollars is None or float(yes_ask_dollars) == 0:
+                        continue  # skip markets with no liquidity
+                    yes_ask = float(yes_ask_dollars) * 100  # convert to cents
                     no_ask  = 100 - yes_ask
                     close_time_str = m.get("close_time", "")
                     close_time = (
