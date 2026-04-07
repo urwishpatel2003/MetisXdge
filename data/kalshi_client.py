@@ -121,6 +121,11 @@ class KalshiClient:
             for m in markets:
                 ticker = m.get("ticker", "")
 
+                # Log unique prefixes from first page to identify correct format
+                if page == 1 and len(contracts) < 5:
+                    prefix = ticker[:12]
+                    logger.info(f"TICKER SAMPLE: {ticker[:60]} | title: {m.get('title','')[:40]}")
+
                 # Only individual game markets
                 if not any(ticker.startswith(p) for p in GAME_PREFIXES):
                     continue
