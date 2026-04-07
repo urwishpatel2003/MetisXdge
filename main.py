@@ -7,7 +7,7 @@ from datetime import datetime
 
 from config.settings import (
     ODDS_API_KEY, ODDS_BASE_URL,
-    KALSHI_EMAIL, KALSHI_PASSWORD,
+    KALSHI_API_KEY,
     NTFY_TOPIC, NTFY_BASE_URL,
     TARGET_SPORTS, SHARP_BOOKS,
     MIN_ODDS_GAP, MIN_EV, MIN_FAIR_PROB,
@@ -103,10 +103,8 @@ def run_scan(kalshi, odds, ntfy):
 def main():
     logger.info("MetisXdge starting up...")
     logger.info(f"Max legs: {MAX_LEGS} | Min gap: {MIN_ODDS_GAP}pts | Sports: {TARGET_SPORTS}")
-    logger.info(f"KALSHI_EMAIL: '{KALSHI_EMAIL[:4]}...' len={len(KALSHI_EMAIL)}")
-    logger.info(f"KALSHI_PASSWORD len={len(KALSHI_PASSWORD)}")
 
-    kalshi = KalshiClient(KALSHI_EMAIL, KALSHI_PASSWORD, ssl_verify=SSL_VERIFY)
+    kalshi = KalshiClient(KALSHI_API_KEY, ssl_verify=SSL_VERIFY)
     odds   = OddsClient(ODDS_API_KEY, ODDS_BASE_URL)
     ntfy   = NtfyAlerter(topic=NTFY_TOPIC, base_url=NTFY_BASE_URL)
 
