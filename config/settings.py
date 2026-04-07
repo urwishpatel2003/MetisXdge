@@ -30,7 +30,7 @@ MIN_FAIR_PROB = 0.60   # Only use legs where sharp prob > 60%
 MAX_LEGS      = 4      # Max legs per combo
 
 # ── Scheduler ─────────────────────────────────────────────
-SCAN_INTERVAL_SECONDS = 60
+SCAN_INTERVAL_SECONDS = 300  # 5 min — Kalshi rate limit is 10 req/s basic tier
 
 # ── Database ──────────────────────────────────────────────
 DB_PATH = "data/metisxdge.db"
