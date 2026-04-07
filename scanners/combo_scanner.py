@@ -97,20 +97,26 @@ def parse_title(title: str, ticker: str) -> Optional[dict]:
             'raw':  title,
         }
 
-    # GAME TOTAL: "Arizona vs New York M Total Runs" (numbered by ticker suffix)
+    # GAME TOTAL: "Arizona vs New York M Total Runs" or "Milwaukee at Brooklyn: Total Points"
     m = re.match(
-        r'^(.+?)\s+(?:vs|at)\s+(.+?)\s+(?:total|totals)\s*(runs?|points?|goals?)?',
+        r'^(.+?)\s+(?:vs|at)\s+(.+?)[\s:]+(?:total|totals)',
         t, re.IGNORECASE
     )
     if m:
-        # Extract line from ticker suffix e.g. KXMLBTOTAL-...-9 → 9
         line_m = re.search(r'-(\d+\.?\d*)$', ticker)
         if line_m:
+            line_val = float(line_m.group(1))
+            # Sanity check — MLB totals 4-15, NBA 180-280, NHL 4-9
+            # Skip if line looks like a raw points total (>50) for MLB/NHL
+            ticker_upper = ticker.upper()
+            if 'KXMLB' in ticker_upper or 'KXNHL' in ticker_upper:
+                if line_val > 20:
+                    return None  # bogus line
             return {
                 'type':  'game_total',
-                'away':  m.group(1).strip(),
-                'home':  m.group(2).strip(),
-                'line':  float(line_m.group(1)),
+                'away':  m.group(1).strip().rstrip(':'),
+                'home':  m.group(2).strip().rstrip(':'),
+                'line':  line_val,
                 'side':  'yes',
                 'raw':   title,
             }
@@ -297,7 +303,13 @@ def match_legs(
     matched     = []
     best_by_key = {}
 
+    logger.info(f"Starting leg matching for {len(contracts)} contracts...")
+    count = 0
     for contract in contracts:
+        count += 1
+        if count % 200 == 0:
+            logger.info(f"  Matching progress: {count}/{len(contracts)} contracts, {len(best_by_key)} legs so far")
+
         ticker = contract.ticker
 
         # Price must be active (not near 0 or 100)
