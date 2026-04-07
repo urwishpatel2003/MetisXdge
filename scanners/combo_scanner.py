@@ -1,13 +1,20 @@
 # scanners/combo_scanner.py
 """
-MetisXdge — Combo Scanner v4
-Targets confirmed Kalshi individual game markets:
-  KXMLBSPREAD  → "[Team] wins by over X.5 runs?"
-  KXMLBTOTAL   → "[Away] vs [Home] Total Runs?" (numbered contracts)
-  KXMLBTEAMTOTAL → "Will [Team] score over X.5 runs?"
-  KXNBASPREAD  → "[Team] wins by over X.5 Points?"
-  KXNHLSPREAD  → "[Team] wins by over X.5 goals?"
-  KXMLBGAME    → "[Away] vs [Home] Winner?" / "[Away] at [Home] Winner?"
+MetisXdge — Combo Scanner
+--------------------------
+Core logic (from original screenshot trade):
+
+  1. Pull Kalshi individual game contracts (KXMLBSPREAD, KXNHLSPREAD, KXMLBGAME etc.)
+  2. For each contract, derive fair probability:
+     - Spread contracts (wins by over X.5): use ML prob + run distribution model
+     - Moneyline contracts: use ML prob directly
+  3. Compare Kalshi price vs fair price
+  4. Build 2-4 leg combos
+  5. Flag where: Kalshi combined payout >> fair parlay odds
+
+The edge: Kalshi multiplies individual contract prices naively.
+When individual prices are mispriced (too cheap), the combo payout
+explodes vs fair value — exactly like your +419 vs +142 example.
 """
 
 import re
@@ -18,7 +25,7 @@ from datetime import datetime
 from typing import Optional
 from difflib import SequenceMatcher
 
-from core.fair_value import implied_prob_to_american, american_to_implied_prob
+from core.fair_value import implied_prob_to_american
 from core.models import KalshiContract, OddsLine
 
 logger = logging.getLogger(__name__)
@@ -26,15 +33,11 @@ logger = logging.getLogger(__name__)
 SPORT_SHORT = {
     'baseball_mlb':              'MLB',
     'basketball_nba':            'NBA',
-    'basketball_ncaab':          'NCAAB',
-    'americanfootball_nfl':      'NFL',
     'icehockey_nhl':             'NHL',
-    'soccer_epl':                'EPL',
-    'soccer_uefa_champs_league': 'UCL',
-    'soccer_usa_mls':            'MLS',
+    'americanfootball_nfl':      'NFL',
+    'basketball_ncaab':          'NCAAB',
 }
 
-# Ticker prefix → sport mapping
 TICKER_SPORT = {
     'KXMLB': 'baseball_mlb',
     'KXNBA': 'basketball_nba',
@@ -43,268 +46,73 @@ TICKER_SPORT = {
     'KXNCAAB': 'basketball_ncaab',
 }
 
+# Run/goal distribution model
+# P(team wins by N+ | team wins) — calibrated empirically
+MLB_WIN_BY = {1: 1.00, 2: 0.67, 3: 0.47, 4: 0.32, 5: 0.22, 6: 0.14}
+NHL_WIN_BY = {1: 1.00, 2: 0.55, 3: 0.32, 4: 0.18}
+
+
 def ticker_sport(ticker: str) -> str:
     for prefix, sport in TICKER_SPORT.items():
         if ticker.startswith(prefix):
             return sport
-    return ''
+    return 'baseball_mlb'
+
+
+def fair_prob_for_spread(ml_win_prob: float, line: float, sport: str) -> float:
+    """
+    P(team wins by line+) = P(win) * P(win by line+ | win)
+    Used for YES side of spread contracts.
+    NO side = 1 - this value.
+    """
+    n = int(line)
+    if sport == 'baseball_mlb':
+        cond = MLB_WIN_BY.get(n, max(0.06, 0.14 - (n - 6) * 0.03))
+    elif sport == 'icehockey_nhl':
+        cond = NHL_WIN_BY.get(n, 0.08)
+    elif sport == 'basketball_nba':
+        cond = max(0.03, 1.0 - line / 30.0)
+    else:
+        cond = max(0.10, 1.0 - line * 0.10)
+    return ml_win_prob * cond
+
 
 def sim(a: str, b: str) -> float:
     return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
-# Known team city/name disambiguation
-TEAM_ALIASES = {
-    'chicago ws': ['white sox', 'chicago white'],
-    'chicago c':  ['cubs', 'chicago cubs'],
-    'chicago':    ['cubs', 'white sox', 'chicago'],
-    'new york y': ['yankees', 'new york yankees'],
-    'new york m': ['mets', 'new york mets'],
-    'new york':   ['yankees', 'mets', 'knicks', 'rangers', 'islanders'],
-    'los angeles d': ['dodgers', 'los angeles dodgers'],
-    'los angeles a': ['angels', 'los angeles angels'],
-    'los angeles c': ['clippers'],
-    'los angeles l': ['lakers'],
-}
 
-def team_match(team: str, outcome: str) -> float:
-    """Score how well team name matches an odds outcome."""
-    team_l    = team.lower().strip()
-    outcome_l = outcome.lower().strip()
-
-    # Check aliases first for known ambiguous names
-    for alias_key, alias_vals in TEAM_ALIASES.items():
-        if alias_key in team_l:
-            if any(v in outcome_l for v in alias_vals):
-                return 0.9
-            # If alias exists but none match, penalize
-            if team_l == alias_key:
-                return 0.0
-
+def find_ml(team: str, sport: str, lines: list) -> Optional[OddsLine]:
+    """Find the moneyline for a team from sharp lines."""
+    best, bs = None, 0.55
+    team_l   = team.lower().strip()
     words    = [w for w in team_l.split() if len(w) > 3]
-    word_hit = any(w in outcome_l for w in words)
-    score    = max(sim(team_l, outcome_l), 0.75 if word_hit else 0.0)
-    return score
 
+    for line in lines:
+        if line.market_key != 'h2h':
+            continue
+        if sport and line.sport != sport:
+            continue
+        outcome_l = line.outcome.lower()
+        word_hit  = any(w in outcome_l for w in words)
+        score     = max(sim(team_l, outcome_l), 0.8 if word_hit else 0.0)
+        if score > bs:
+            bs, best = score, line
 
-def parse_title(title: str, ticker: str) -> Optional[dict]:
-    """
-    Parse a Kalshi contract title into structured leg data.
-    Returns dict with keys: type, team, line, side, raw
-    or None if unparseable.
-    """
-    t = title.strip().rstrip('?').strip()
-
-    # SPREAD: "New York M wins by over 3.5 runs"
-    m = re.match(
-        r'^(.+?)\s+wins by over\s+([\d.]+)\s*(runs?|points?|goals?)?$',
-        t, re.IGNORECASE
-    )
-    if m:
-        return {
-            'type': 'spread',
-            'team': m.group(1).strip(),
-            'line': float(m.group(2)),
-            'side': 'yes',  # YES = team wins by over X
-            'raw':  title,
-        }
-
-    # TEAM TOTAL: "Will New York M score over 7.5 runs"
-    m = re.match(
-        r'^will\s+(.+?)\s+score over\s+([\d.]+)\s*(runs?|points?|goals?)?$',
-        t, re.IGNORECASE
-    )
-    if m:
-        return {
-            'type': 'team_total',
-            'team': m.group(1).strip(),
-            'line': float(m.group(2)),
-            'side': 'yes',
-            'raw':  title,
-        }
-
-    # GAME TOTAL: "Arizona vs New York M Total Runs" or "Milwaukee at Brooklyn: Total Points"
-    m = re.match(
-        r'^(.+?)\s+(?:vs|at)\s+(.+?)[\s:]+(?:total|totals)',
-        t, re.IGNORECASE
-    )
-    if m:
-        line_m = re.search(r'-(\d+\.?\d*)$', ticker)
-        if line_m:
-            line_val = float(line_m.group(1))
-            # Sanity check — MLB totals 4-15, NBA 180-280, NHL 4-9
-            # Skip if line looks like a raw points total (>50) for MLB/NHL
-            ticker_upper = ticker.upper()
-            if 'KXMLB' in ticker_upper or 'KXNHL' in ticker_upper:
-                if line_val > 20:
-                    return None  # bogus line
-            return {
-                'type':  'game_total',
-                'away':  m.group(1).strip().rstrip(':'),
-                'home':  m.group(2).strip().rstrip(':'),
-                'line':  line_val,
-                'side':  'yes',
-                'raw':   title,
-            }
-
-    # WINNER: "Pittsburgh vs Chicago C Winner" / "Vegas at Seattle Winner"
-    m = re.match(
-        r'^(.+?)\s+(?:vs|at)\s+(.+?)\s+winner$',
-        t, re.IGNORECASE
-    )
-    if m:
-        return {
-            'type': 'winner',
-            'away': m.group(1).strip(),
-            'home': m.group(2).strip(),
-            'side': 'yes',
-            'raw':  title,
-        }
-
-    return None
-
-
-def find_sharp_line(parsed: dict, lines: list, ticker: str) -> Optional[tuple]:
-    """
-    Match parsed leg to a sharp odds line.
-    Returns (OddsLine, fair_prob, side_description) or None.
-    """
-    sport = ticker_sport(ticker)
-
-    if parsed['type'] == 'spread':
-        team     = parsed['team']
-        target   = parsed['line']
-        best, bs = None, 0.6  # stricter threshold
-
-        for line in lines:
-            if line.market_key != 'spreads':
-                continue
-            if sport and line.sport != sport:
-                continue
-            score = team_match(team, line.outcome)
-            if score < 0.6:
-                continue
-            # Boost if line value is close
-            if hasattr(line, 'point') and line.point is not None:
-                try:
-                    if abs(abs(float(line.point)) - target) <= 1.0:
-                        score += 0.2
-                except:
-                    pass
-            if score > bs:
-                bs, best = score, line
-
-        if not best:
-            return None
-
-        # YES side: team wins by over X (underdog covering)
-        # NO side: team does NOT win by over X (favorite does not cover big)
-        # Return YES side fair prob — caller decides which side to use
-        fair_prob = best.implied_prob
-        return best, fair_prob, f"YES {parsed['team']} -{parsed['line']}"
-
-    elif parsed['type'] == 'team_total':
-        team   = parsed['team']
-        target = parsed['line']
-        best, bs = None, 0.0
-
-        for line in lines:
-            if line.market_key != 'totals':
-                continue
-            if sport and line.sport != sport:
-                continue
-            # Team totals: match team name to home/away
-            score = max(
-                team_match(team, line.home_team),
-                team_match(team, line.away_team)
-            )
-            if hasattr(line, 'point') and line.point is not None:
-                try:
-                    if abs(float(line.point) - target) <= 1.5:
-                        score += 0.2
-                except:
-                    pass
-            if score > bs:
-                bs, best = score, line
-
-        if not best or bs < 0.4:
-            return None
-
-        fair_prob = best.implied_prob
-        return best, fair_prob, f"Will {parsed['team']} Over {parsed['line']}"
-
-    elif parsed['type'] == 'game_total':
-        home   = parsed['home']
-        away   = parsed['away']
-        target = parsed['line']
-        best, bs = None, 0.0
-
-        for line in lines:
-            if line.market_key != 'totals':
-                continue
-            if sport and line.sport != sport:
-                continue
-            score = max(
-                team_match(home, line.home_team),
-                team_match(away, line.away_team)
-            )
-            if hasattr(line, 'point') and line.point is not None:
-                try:
-                    if abs(float(line.point) - target) <= 1.0:
-                        score += 0.2
-                except:
-                    pass
-            if score > bs:
-                bs, best = score, line
-
-        if not best or bs < 0.3:
-            return None
-
-        # YES = Over
-        fair_prob = best.implied_prob
-        return best, fair_prob, f"Over {parsed['line']} ({parsed['away']} @ {parsed['home']})"
-
-    elif parsed['type'] == 'winner':
-        home = parsed['home']
-        away = parsed['away']
-        best, bs = None, 0.5
-
-        for line in lines:
-            if line.market_key != 'h2h':
-                continue
-            if sport and line.sport != sport:
-                continue
-            score = max(
-                team_match(home, line.outcome),
-                team_match(away, line.outcome)
-            )
-            if score > bs:
-                bs, best = score, line
-
-        if not best:
-            return None
-
-        # Match which team this contract is for from ticker
-        # e.g. KXMLBGAME-...-PIT = Pittsburgh winner
-        fair_prob = best.implied_prob
-        return best, fair_prob, f"{parsed['home']} or {parsed['away']} Winner"
-
-    return None
+    return best
 
 
 @dataclass
 class ComboLeg:
     kalshi_ticker: str
     display_name:  str
-    leg_type:      str
-    kalshi_price:  float
-    kalshi_prob:   float
-    fair_prob:     float
+    kalshi_price:  float   # cents (0-100) — what you pay on Kalshi
+    kalshi_prob:   float   # kalshi_price / 100
+    fair_prob:     float   # derived from sharp ML + model
     fair_american: int
-    sharp_odds:    int
-    sharp_book:    str
+    sharp_ml:      int     # the underlying ML odds used
     sport:         str
     event:         str
-    edge_pct:      float
+    edge_pct:      float   # (fair - kalshi) / kalshi * 100
 
 
 @dataclass
@@ -313,9 +121,9 @@ class ComboSignal:
     n_legs:               int
     fair_combined_prob:   float
     kalshi_combined_prob: float
-    fair_american:        int
-    kalshi_american:      int
-    odds_gap:             int
+    fair_american:        int     # what fair parlay should pay
+    kalshi_american:      int     # what Kalshi actually pays
+    odds_gap:             int     # kalshi - fair (the overlay)
     ev_per_dollar:        float
     edge_pct:             float
     sports:               list
@@ -323,110 +131,148 @@ class ComboSignal:
     signal_id:            Optional[str] = None
 
 
-def match_legs(
-    contracts:     list,
-    lines:         list,
-    min_fair_prob: float = 0.40,
-) -> list:
+def match_legs(contracts: list, lines: list) -> list:
+    """
+    For each Kalshi contract:
+    1. Parse the title to understand what outcome it represents
+    2. Find the sharp ML for the relevant team
+    3. Derive fair probability (ML directly or ML + distribution model)
+    4. Compare to Kalshi price
+    5. Keep if Kalshi is underpricing (kalshi_prob < fair_prob)
+    """
     matched     = []
     best_by_key = {}
 
     logger.info(f"Starting leg matching for {len(contracts)} contracts...")
     count = 0
+
     for contract in contracts:
         count += 1
         if count % 200 == 0:
-            logger.info(f"  Matching progress: {count}/{len(contracts)} contracts, {len(best_by_key)} legs so far")
+            logger.info(f"  Progress: {count}/{len(contracts)}, {len(best_by_key)} legs")
 
-        ticker = contract.ticker
-
-        # Price must be active (not near 0 or 100)
+        ticker    = contract.ticker
+        title     = contract.title.strip().rstrip('?').strip()
         yes_price = contract.yes_price
-        if yes_price < 15 or yes_price > 85:
+        sport     = ticker_sport(ticker)
+        sport_s   = SPORT_SHORT.get(sport, sport.upper())
+
+        # ── Parse title ────────────────────────────────────────────────────────
+
+        # SPREAD: "[Team] wins by over X.5 runs/points/goals"
+        m = re.match(
+            r'^(.+?)\s+wins by over\s+([\d.]+)\s*(runs?|points?|goals?)?$',
+            title, re.IGNORECASE
+        )
+        if m:
+            team   = m.group(1).strip()
+            line   = float(m.group(2))
+            ml_line = find_ml(team, sport, lines)
+            if not ml_line:
+                continue
+
+            ml_prob = ml_line.implied_prob
+
+            # Fair prob for YES side (team wins by line+)
+            fair_yes = fair_prob_for_spread(ml_prob, line, sport)
+            fair_no  = 1 - fair_yes
+
+            # Add BOTH sides — both can be underpriced depending on Kalshi's pricing
+            no_price = 100 - yes_price
+
+            candidates = [
+                (yes_price, fair_yes, f"YES {team} -{line} ({sport_s})"),
+                (no_price,  fair_no,  f"NO {team} -{line} ({sport_s})"),
+            ]
+
+            for k_price, fair_prob, display in candidates:
+                if k_price < 10 or k_price > 90:
+                    continue
+                kalshi_prob = k_price / 100.0
+                # Only keep if Kalshi is underpricing (we get more than fair value)
+                if kalshi_prob >= fair_prob:
+                    continue
+                edge = (fair_prob - kalshi_prob) / kalshi_prob * 100
+                if edge < 3:  # minimum 3% edge
+                    continue
+                fair_am = implied_prob_to_american(fair_prob)
+                event   = f"{ml_line.away_team} @ {ml_line.home_team}"
+                key     = (display.lower(), event)
+                leg     = ComboLeg(
+                    kalshi_ticker=ticker, display_name=display,
+                    kalshi_price=k_price, kalshi_prob=kalshi_prob,
+                    fair_prob=fair_prob, fair_american=fair_am,
+                    sharp_ml=ml_line.american_odds, sport=sport, event=event,
+                    edge_pct=edge,
+                )
+                if key not in best_by_key or k_price > best_by_key[key].kalshi_price:
+                    best_by_key[key] = leg
             continue
 
-        parsed = parse_title(contract.title, ticker)
-        if not parsed:
-            continue
+        # MONEYLINE: "[Away] vs/at [Home] Winner" or just team winner
+        m = re.match(
+            r'^(.+?)\s+(?:vs|at)\s+(.+?)\s+winner$',
+            title, re.IGNORECASE
+        )
+        if m:
+            # Winner contracts — need ticker suffix to know which team
+            # e.g. KXMLBGAME-...-PIT = Pittsburgh winner
+            away = m.group(1).strip()
+            home = m.group(2).strip()
+            # Use ticker suffix to determine which team this contract is for
+            suffix = ticker.split('-')[-1].upper()
 
-        result = find_sharp_line(parsed, lines, ticker)
-        if not result:
-            continue
+            # Match suffix to team
+            team = home if any(
+                s in home.upper() for s in [suffix[:3], suffix]
+            ) else away
 
-        sharp_line, fair_prob_yes, description = result
-        sport       = ticker_sport(ticker)
-        sport_short = SPORT_SHORT.get(sport, sport.upper())
-        event       = f"{sharp_line.away_team} @ {sharp_line.home_team}"
+            ml_line = find_ml(team, sport, lines)
+            if not ml_line:
+                continue
 
-        # Generate BOTH yes and no sides for spread/total contracts
-        sides = [(yes_price, fair_prob_yes, description, 'yes')]
-        if parsed['type'] in ('spread', 'game_total', 'team_total'):
-            no_price    = 100 - yes_price
-            fair_prob_no = 1 - fair_prob_yes
-            no_desc     = description.replace('YES ', 'NO ', 1)
-            sides.append((no_price, fair_prob_no, no_desc, 'no'))
-
-        for k_price, fair_prob, desc, side in sides:
-            if k_price < 15 or k_price > 85:
+            fair_prob = ml_line.implied_prob
+            if yes_price / 100.0 >= fair_prob:
+                continue
+            edge = (fair_prob - yes_price / 100.0) / (yes_price / 100.0) * 100
+            if edge < 3:
                 continue
 
             fair_am = implied_prob_to_american(fair_prob)
-            if fair_am < -250 or fair_am > 250:
-                continue
-
-            if fair_prob < min_fair_prob:
-                continue
-
-            display = f"{desc} ({sport_short})"
+            display = f"{team} ML ({sport_s})"
+            event   = f"{ml_line.away_team} @ {ml_line.home_team}"
             key     = (display.lower(), event)
-
-            kalshi_prob = k_price / 100.0
-            edge        = (fair_prob - kalshi_prob) / kalshi_prob * 100
-
-            # Only include legs where Kalshi is UNDERPRICING (cheaper than fair)
-            # i.e. Kalshi price < fair price — this is where the edge is
-            if kalshi_prob >= fair_prob:
-                continue  # Kalshi overcharging — skip
-
-            # Minimum edge: Kalshi must be at least 5% cheaper than fair
-            if edge < 5:
-                continue
-
-            leg = ComboLeg(
-                kalshi_ticker = ticker,
-                display_name  = display,
-                leg_type      = parsed['type'],
-                kalshi_price  = k_price,
-                kalshi_prob   = kalshi_prob,
-                fair_prob     = fair_prob,
-                fair_american = fair_am,
-                sharp_odds    = sharp_line.american_odds,
-                sharp_book    = sharp_line.book,
-                sport         = sport,
-                event         = event,
-                edge_pct      = edge,
+            leg     = ComboLeg(
+                kalshi_ticker=ticker, display_name=display,
+                kalshi_price=yes_price, kalshi_prob=yes_price/100.0,
+                fair_prob=fair_prob, fair_american=fair_am,
+                sharp_ml=ml_line.american_odds, sport=sport, event=event,
+                edge_pct=edge,
             )
-
-            if key not in best_by_key or k_price > best_by_key[key].kalshi_price:
+            if key not in best_by_key or yes_price > best_by_key[key].kalshi_price:
                 best_by_key[key] = leg
 
     matched = list(best_by_key.values())
 
+    # Log summary
     type_counts = {}
     for leg in matched:
-        type_counts[leg.leg_type] = type_counts.get(leg.leg_type, 0) + 1
+        t = 'NO spread' if leg.display_name.startswith('NO') else \
+            'YES spread' if 'YES' in leg.display_name and 'ML' not in leg.display_name else 'ML'
+        type_counts[t] = type_counts.get(t, 0) + 1
 
-    logger.info(f"Matched {len(matched)} legs ({len(contracts)} contracts / {len(lines)} lines)")
-    logger.info(f"Leg types: {type_counts}")
-    for leg in matched[:8]:
+    logger.info(f"Matched {len(matched)} underpriced legs | Types: {type_counts}")
+    for leg in sorted(matched, key=lambda l: l.edge_pct, reverse=True)[:8]:
         logger.info(
-            f"  {leg.display_name} | {leg.kalshi_price:.0f}c | "
-            f"Fair {leg.fair_prob:.1%} ({leg.fair_american:+d}) | {leg.event}"
+            f"  {leg.display_name} | Kalshi {leg.kalshi_price:.0f}c | "
+            f"Fair {leg.fair_prob:.1%} ({leg.fair_american:+d}) | "
+            f"Edge {leg.edge_pct:.0f}% | {leg.event}"
         )
     return matched
 
 
 def kalshi_combo_payout(legs: list) -> int:
+    """What Kalshi pays for this combo (naive price multiplication)."""
     dec = 1.0
     for leg in legs:
         dec *= 100.0 / leg.kalshi_price
@@ -434,6 +280,7 @@ def kalshi_combo_payout(legs: list) -> int:
 
 
 def fair_combo_odds(legs: list) -> tuple:
+    """True fair parlay odds from sharp ML + model."""
     prob = 1.0
     for leg in legs:
         prob *= leg.fair_prob
@@ -453,7 +300,7 @@ def scan_combos(
     max_legs:     int   = 4,
     min_odds_gap: int   = 50,
     min_ev:       float = 0.05,
-    max_combos:   int   = 5000,
+    max_combos:   int   = 10000,
 ) -> list:
     signals   = []
     evaluated = 0
@@ -476,7 +323,7 @@ def scan_combos(
             except Exception:
                 continue
 
-            if k_am > 1500:
+            if k_am > 2000:
                 continue
 
             fair_prob, f_am = fair_combo_odds(legs)
