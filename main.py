@@ -56,10 +56,6 @@ def run_scan(kalshi, odds, ntfy):
             logger.warning(f"Odds fetch failed for {sport}: {e}")
 
     logger.info(f"{len(contracts)} Kalshi contracts | {len(all_lines)} sharp lines")
-    # Sample 20 contract titles to understand structure
-    sample = [c.title for c in contracts[:20]]
-    for t in sample:
-        logger.info(f"SAMPLE: {t}")
 
     if not contracts or not all_lines:
         logger.warning("Insufficient data — skipping scan")
