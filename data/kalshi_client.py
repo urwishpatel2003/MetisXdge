@@ -2,7 +2,6 @@
 """
 Kalshi REST API Client — RSA-PSS Auth (2026)
 Production URL: https://api.elections.kalshi.com/trade-api/v2
-Auth: RSA-PSS signed headers per request
 """
 
 import time
@@ -23,29 +22,43 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
 
 
+def _fix_pem(pem: str) -> str:
+    """
+    Fix PEM key that had newlines stripped when stored in env var.
+    Handles both literal \\n and space-separated base64 blocks.
+    """
+    pem = pem.strip()
+    # If literal \n strings present, replace them
+    pem = pem.replace("\\n", "\n")
+    # If still no newlines, the header/footer and body are space-separated
+    if "\n" not in pem:
+        for header in ["-----BEGIN RSA PRIVATE KEY-----", "-----BEGIN PRIVATE KEY-----"]:
+            if header in pem:
+                footer = header.replace("BEGIN", "END")
+                body = pem.replace(header, "").replace(footer, "").strip()
+                # Split body into 64-char lines
+                body_lines = "\n".join(body[i:i+64] for i in range(0, len(body), 64))
+                pem = f"{header}\n{body_lines}\n{footer}"
+                break
+    return pem
+
+
 class KalshiClient:
     def __init__(self, api_key_id: str, private_key_pem: str, ssl_verify: bool = True):
-        """
-        Args:
-            api_key_id:      The Key ID from Kalshi Settings → API Keys
-            private_key_pem: Full contents of kalshi_private.pem
-            ssl_verify:      Set False only if SSL issues on network
-        """
         self.api_key_id = api_key_id
         self.ssl_verify = ssl_verify
         self.session    = requests.Session()
         self.session.verify = ssl_verify
 
-        # Load private key
+        pem = _fix_pem(private_key_pem)
         self.private_key = serialization.load_pem_private_key(
-            private_key_pem.encode("utf-8"),
+            pem.encode("utf-8"),
             password=None,
             backend=default_backend()
         )
         logger.info("Kalshi client initialized with RSA-PSS auth")
 
     def _sign(self, timestamp: str, method: str, path: str) -> str:
-        """Generate RSA-PSS signature for request headers"""
         message = f"{timestamp}{method}{path}"
         signature = self.private_key.sign(
             message.encode("utf-8"),
@@ -58,7 +71,6 @@ class KalshiClient:
         return base64.b64encode(signature).decode("utf-8")
 
     def _headers(self, method: str, path: str) -> dict:
-        """Build signed auth headers for a request"""
         timestamp = str(int(time.time() * 1000))
         signature = self._sign(timestamp, method.upper(), path)
         return {
@@ -94,11 +106,9 @@ class KalshiClient:
 
             for m in markets:
                 try:
-                    # March 2026: prices are now dollar strings e.g. "0.6500"
                     yes_ask_raw = m.get("yes_ask", "0.50") or "0.50"
-                    yes_ask = float(yes_ask_raw) * 100  # convert to cents
+                    yes_ask = float(str(yes_ask_raw)) * 100
                     no_ask  = 100 - yes_ask
-
                     close_time_str = m.get("close_time", "")
                     close_time = (
                         datetime.fromisoformat(close_time_str.replace("Z", "+00:00"))
