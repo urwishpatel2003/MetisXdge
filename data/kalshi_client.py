@@ -23,14 +23,25 @@ BASE_URL  = "https://api.elections.kalshi.com/trade-api/v2"
 MAX_PAGES = 20
 
 # Individual game market prefixes — these are the real tradeable markets
-# Series tickers for individual game markets (from URL structure)
+# Series tickers confirmed from Kalshi browser console
 GAME_SERIES = [
-    'kxmlbgame',    # MLB: /markets/kxmlbgame/
-    'kxnbagame',    # NBA
-    'kxnhlgame',    # NHL
-    'kxnflgame',    # NFL
-    'kxsoccer',     # Soccer
-    'kxncaabgame',  # NCAAB
+    # MLB
+    'kxmlbspread',      # MLB run lines — PRIMARY TARGET
+    'kxmlbtotal',       # MLB game totals
+    'kxmlbteamtotal',   # MLB team totals
+    'kxmlbgame',        # MLB moneyline
+    # NBA
+    'kxnbaspread',      # NBA point spreads
+    'kxnbatotal',       # NBA game totals
+    'kxnbagame',        # NBA moneyline
+    # NHL
+    'kxnhlspread',      # NHL puck lines
+    'kxnhltotal',       # NHL game totals
+    'kxnhlgame',        # NHL moneyline
+    # NFL
+    'kxnflspread',
+    'kxnfltotal',
+    'kxnflgame',
 ]
 
 
