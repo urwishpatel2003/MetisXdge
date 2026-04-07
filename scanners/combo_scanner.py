@@ -235,6 +235,13 @@ def match_legs(
 
             if fair_prob < min_fair_prob:
                 continue
+
+            # Skip if team name looks like a person (First Last = 2 words, both capitalized)
+            # Tennis players, golfers etc should not match team sport lines
+            team_name = pl.get("team", "")
+            name_parts = team_name.strip().split()
+            if len(name_parts) == 2 and all(p[0].isupper() for p in name_parts if p):
+                continue  # Looks like a person name, skip
             kalshi_prob  = kalshi_price / 100.0
             edge         = (fair_prob - kalshi_prob) / kalshi_prob * 100 if kalshi_prob > 0 else 0
 
