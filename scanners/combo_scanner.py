@@ -1,13 +1,7 @@
 # scanners/combo_scanner.py
 """
-MetisXdge — Universal Combo Scanner
-Handles all Kalshi market types:
-  - Moneyline: "yes Kansas City"
-  - Spread NO: "no Cleveland wins by over 2.5 runs"
-  - Spread YES: "yes Oklahoma City wins by over 2.5 Points"
-  - Totals: "yes Over 8.5 runs scored"
-Matches each leg to sharp lines, builds 2-4 leg combos,
-flags where Kalshi payout >> fair combined probability.
+MetisXdge — Combo Scanner v3
+Clean, strict matching only. Better to have fewer real signals than many fake ones.
 """
 
 import re
@@ -23,157 +17,126 @@ from core.models import KalshiContract, OddsLine
 
 logger = logging.getLogger(__name__)
 
+# Known MLB team city/name keywords
+MLB_TEAMS = {
+    'arizona', 'atlanta', 'baltimore', 'boston', 'chicago', 'cincinnati',
+    'cleveland', 'colorado', 'detroit', 'houston', 'kansas city', 'los angeles',
+    'miami', 'milwaukee', 'minnesota', 'new york', 'oakland', 'philadelphia',
+    'pittsburgh', 'san diego', 'san francisco', 'seattle', 'st. louis',
+    'tampa bay', 'texas', 'toronto', 'washington', 'new york y', 'new york m',
+    'los angeles d', 'los angeles a', 'kansas', 'st louis'
+}
 
-# ── Leg parsing ────────────────────────────────────────────────────────────────
+NBA_TEAMS = {
+    'atlanta', 'boston', 'brooklyn', 'charlotte', 'chicago', 'cleveland',
+    'dallas', 'denver', 'detroit', 'golden state', 'houston', 'indiana',
+    'los angeles', 'memphis', 'miami', 'milwaukee', 'minnesota', 'new orleans',
+    'new york', 'oklahoma city', 'orlando', 'philadelphia', 'phoenix',
+    'portland', 'sacramento', 'san antonio', 'toronto', 'utah', 'washington',
+    'los angeles c', 'los angeles l', 'oklahoma'
+}
 
-# Patterns for each market type
-RE_SPREAD = re.compile(
-    r'^(yes|no)\s+(.+?)\s+wins by over\s+([\d.]+)\s*(runs?|points?|goals?)?$',
+NHL_TEAMS = {
+    'anaheim', 'arizona', 'boston', 'buffalo', 'calgary', 'carolina',
+    'chicago', 'colorado', 'columbus', 'dallas', 'detroit', 'edmonton',
+    'florida', 'los angeles', 'minnesota', 'montreal', 'nashville',
+    'new jersey', 'new york', 'ottawa', 'philadelphia', 'pittsburgh',
+    'san jose', 'seattle', 'st. louis', 'tampa bay', 'toronto', 'vancouver',
+    'vegas', 'washington', 'winnipeg', 'utah', 'golden knights',
+    'uta mammoth', 'min wild', 'det red wings', 'edm oilers', 'phi flyers'
+}
+
+SOCCER_TEAMS = {
+    'arsenal', 'chelsea', 'liverpool', 'manchester', 'tottenham', 'newcastle',
+    'aston villa', 'brighton', 'everton', 'wolves', 'west ham', 'fulham',
+    'brentford', 'crystal palace', 'leicester', 'nottingham', 'bournemouth',
+    'real madrid', 'barcelona', 'atletico', 'inter milan', 'ac milan',
+    'juventus', 'napoli', 'bayern', 'dortmund', 'psg', 'porto',
+    'celtic', 'rangers', 'la galaxy', 'inter miami', 'atlanta united',
+    'seattle sounders', 'portland timbers', 'sporting', 'toronto fc'
+}
+
+SPORT_TEAMS = {
+    'baseball_mlb': MLB_TEAMS,
+    'basketball_nba': NBA_TEAMS,
+    'icehockey_nhl': NHL_TEAMS,
+    'soccer_epl': SOCCER_TEAMS,
+    'soccer_uefa_champs_league': SOCCER_TEAMS,
+    'soccer_usa_mls': SOCCER_TEAMS,
+}
+
+SPORT_SHORT = {
+    'baseball_mlb': 'MLB',
+    'basketball_nba': 'NBA',
+    'basketball_ncaab': 'NCAAB',
+    'americanfootball_nfl': 'NFL',
+    'icehockey_nhl': 'NHL',
+    'soccer_epl': 'EPL',
+    'soccer_uefa_champs_league': 'UCL',
+    'soccer_usa_mls': 'MLS',
+}
+
+# Patterns to reject
+REJECT_PATTERN = re.compile(
+    r':\s*\d+\+|\d+\+|wins by over|wins by under|over \d|under \d|'
+    r'points scored|runs scored|rebounds|assists|strikeouts|home run|'
+    r'both teams|first half|quarter|tie|draw|election|bitcoin|'
+    r'weather|oscar|fed rate|gdp|season wins|tournament|series',
     re.IGNORECASE
 )
-RE_TOTAL = re.compile(
-    r'^(yes|no)\s+(over|under)\s+([\d.]+)\s*(runs?|points?|goals?)?\s*(scored)?$',
-    re.IGNORECASE
-)
-RE_MONEYLINE = re.compile(
-    r'^yes\s+([A-Za-z][A-Za-z\s\.\-]{2,28})$',
-    re.IGNORECASE
-)
-
-# Skip player props
-PROP_PATTERN = re.compile(
-    r':\s*\d+\+|\d+\+\s*assists|\d+\+\s*rebounds|strikeout|home run|'
-    r'election|president|bitcoin|ethereum|weather|oscar|emmy|grammy|'
-    r'fed rate|gdp|inflation|tournament winner|season|award',
-    re.IGNORECASE
-)
 
 
-def parse_leg(part: str) -> Optional[dict]:
-    """
-    Parse a single Kalshi leg string into structured fields.
-    Returns dict with keys: side, market_type, team, line, raw
-    or None if unparseable/prop.
-    """
+def parse_moneyline_team(part: str) -> Optional[str]:
+    """Extract team name from 'yes TeamName' if it's a valid moneyline."""
     part = part.strip()
-    if not part:
+    if not part.lower().startswith('yes '):
         return None
-    if PROP_PATTERN.search(part):
+    team = part[4:].strip()
+    if REJECT_PATTERN.search(team):
         return None
-    if re.search(r'\d+\+', part):  # player prop
+    if re.search(r'\d', team):
         return None
-
-    # Spread: "no Cleveland wins by over 2.5 runs"
-    m = RE_SPREAD.match(part)
-    if m:
-        return {
-            "side":        m.group(1).lower(),
-            "market_type": "spread",
-            "team":        m.group(2).strip(),
-            "line":        float(m.group(3)),
-            "raw":         part,
-        }
-
-    # Total: "yes Over 8.5 runs scored"
-    m = RE_TOTAL.match(part)
-    if m:
-        return {
-            "side":        m.group(1).lower(),
-            "market_type": "total",
-            "direction":   m.group(2).lower(),
-            "line":        float(m.group(3)),
-            "raw":         part,
-        }
-
-    # Moneyline: "yes Kansas City"
-    m = RE_MONEYLINE.match(part)
-    if m:
-        team = m.group(1).strip()
-        if re.search(r'\d', team):  # has numbers = prop
-            return None
-        if len(team) < 3 or len(team) > 30:
-            return None
-        return {
-            "side":        "yes",
-            "market_type": "moneyline",
-            "team":        team,
-            "raw":         part,
-        }
-
-    return None
+    if len(team) < 3 or len(team) > 25:
+        return None
+    # Must not look like a person (two capitalized words = player name)
+    words = team.split()
+    if len(words) == 2 and all(w[0].isupper() for w in words):
+        return None
+    return team
 
 
-def extract_legs_from_title(title: str, yes_price: float) -> list[dict]:
+def find_matching_line(team: str, lines: list[OddsLine]) -> Optional[OddsLine]:
     """
-    Split a Kalshi combo title by comma and parse each part.
-    Each leg inherits the contract's yes_price.
+    Strict matching: find a sharp moneyline for this team.
+    Requires >65% similarity to avoid cross-sport false matches.
     """
-    legs = []
-    parts = title.split(",")
-    for part in parts:
-        parsed = parse_leg(part.strip())
-        if parsed:
-            parsed["kalshi_price"] = yes_price if parsed["side"] == "yes" else (100 - yes_price)
-            legs.append(parsed)
-    return legs
-
-
-# ── Matching ───────────────────────────────────────────────────────────────────
-
-def sim(a: str, b: str) -> float:
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio()
-
-
-def team_sim(team: str, outcome: str) -> float:
-    team_l    = team.lower()
-    outcome_l = outcome.lower()
-    words     = [w for w in team_l.split() if len(w) > 3]
-    word_hit  = any(w in outcome_l for w in words)
-    return max(sim(team_l, outcome_l), 0.7 if word_hit else 0.0)
-
-
-def find_best_line(parsed_leg: dict, lines: list[OddsLine]) -> Optional[OddsLine]:
-    """Find the best matching sharp line for a parsed leg."""
-    best, best_score = None, 0.3  # min threshold
+    team_l = team.lower().strip()
+    best, best_score = None, 0.65  # strict threshold
 
     for line in lines:
-        if parsed_leg["market_type"] == "moneyline" and line.market_key == "h2h":
-            score = team_sim(parsed_leg["team"], line.outcome)
-
-        elif parsed_leg["market_type"] == "spread" and line.market_key == "spreads":
-            score = team_sim(parsed_leg["team"], line.outcome)
-            # Check spread line is close
-            if score > 0.3 and hasattr(line, "point") and line.point:
-                if abs(line.point - parsed_leg["line"]) > 2:
-                    score *= 0.5
-
-        elif parsed_leg["market_type"] == "total" and line.market_key == "totals":
-            direction = parsed_leg.get("direction", "over")
-            if direction.lower() in line.outcome.lower():
-                score = 0.8
-            else:
-                score = 0.0
-
-        else:
+        if line.market_key != 'h2h':
             continue
+        outcome_l = line.outcome.lower()
+
+        # Check if any significant word from team appears in outcome
+        team_words = [w for w in team_l.split() if len(w) > 3]
+        word_match = any(w in outcome_l for w in team_words)
+
+        sim = SequenceMatcher(None, team_l, outcome_l).ratio()
+        score = max(sim, 0.75 if word_match else 0.0)
 
         if score > best_score:
             best_score = score
-            best       = line
+            best = line
 
     return best
 
 
-# ── Data classes ───────────────────────────────────────────────────────────────
-
 @dataclass
 class ComboLeg:
     kalshi_ticker:  str
-    kalshi_title:   str
-    display_name:   str      # clean human-readable label
-    side:           str      # "yes" or "no"
-    market_type:    str      # moneyline / spread / total
-    kalshi_price:   float    # price in cents (0-100)
+    display_name:   str
+    kalshi_price:   float
     kalshi_prob:    float
     fair_prob:      float
     sharp_odds:     int
@@ -200,100 +163,61 @@ class ComboSignal:
     signal_id:            Optional[str] = None
 
 
-# ── Core functions ─────────────────────────────────────────────────────────────
-
 def match_legs(
     contracts:     list[KalshiContract],
     lines:         list[OddsLine],
     min_fair_prob: float = 0.55,
 ) -> list[ComboLeg]:
     matched   = []
-    seen_keys = set()
+    best_by_key = {}  # (team, event) -> best leg
 
     for contract in contracts:
-        parsed_legs = extract_legs_from_title(contract.title, contract.yes_price)
+        # Only h2h moneyline markets — strict price range 25-75c
+        if contract.yes_price < 25 or contract.yes_price > 75:
+            continue
 
-        for pl in parsed_legs:
-            key = (contract.ticker, pl["raw"].lower())
-            if key in seen_keys:
+        parts = contract.title.split(',')
+        for part in parts:
+            team = parse_moneyline_team(part.strip())
+            if not team:
                 continue
 
-            line = find_best_line(pl, lines)
+            line = find_matching_line(team, lines)
             if not line:
                 continue
 
-            # For NO side, flip the probability
             fair_prob = line.implied_prob
-            if pl["side"] == "no":
-                fair_prob = 1 - fair_prob
-
-            kalshi_price = pl["kalshi_price"]
-
-            # Filter out illiquid/outlier prices (20c-80c sweet spot)
-            if kalshi_price < 20 or kalshi_price > 80:
-                continue
-
             if fair_prob < min_fair_prob:
                 continue
 
-            # Skip if team name looks like a person (First Last = 2 words, both capitalized)
-            # Tennis players, golfers etc should not match team sport lines
-            team_name = pl.get("team", "")
-            name_parts = team_name.strip().split()
-            if len(name_parts) == 2 and all(p[0].isupper() for p in name_parts if p):
-                continue  # Looks like a person name, skip
+            sport_short = SPORT_SHORT.get(line.sport, line.sport.upper())
+            display     = f"{team} ML ({sport_short})"
+            event       = f"{line.away_team} @ {line.home_team}"
+            key         = (team.lower(), event)
+
+            kalshi_price = contract.yes_price
             kalshi_prob  = kalshi_price / 100.0
-            edge         = (fair_prob - kalshi_prob) / kalshi_prob * 100 if kalshi_prob > 0 else 0
+            edge         = (fair_prob - kalshi_prob) / kalshi_prob * 100
 
-            # Build display name with sport context
-            mt = pl["market_type"]
-            sport_short = {
-                "baseball_mlb": "MLB",
-                "basketball_nba": "NBA",
-                "basketball_ncaab": "NCAAB",
-                "americanfootball_nfl": "NFL",
-                "americanfootball_ncaaf": "NCAAF",
-                "icehockey_nhl": "NHL",
-                "soccer_epl": "EPL",
-                "soccer_uefa_champs_league": "UCL",
-                "soccer_usa_mls": "MLS",
-            }.get(line.sport, line.sport.split("_")[-1].upper())
-
-            if mt == "moneyline":
-                display = f"{pl['team']} ML ({sport_short})"
-            elif mt == "spread":
-                display = f"NO {pl['team']} -{pl['line']} ({sport_short})" if pl["side"] == "no" else f"{pl['team']} -{pl['line']} ({sport_short})"
-            elif mt == "total":
-                display = f"{pl.get('direction','over').title()} {pl['line']} ({sport_short})"
-            else:
-                display = pl["raw"][:30]
-
-            seen_keys.add(key)
-            matched.append(ComboLeg(
+            leg = ComboLeg(
                 kalshi_ticker = contract.ticker,
-                kalshi_title  = contract.title,
                 display_name  = display,
-                side          = pl["side"],
-                market_type   = mt,
                 kalshi_price  = kalshi_price,
                 kalshi_prob   = kalshi_prob,
                 fair_prob     = fair_prob,
                 sharp_odds    = line.american_odds,
                 sharp_book    = line.book,
                 sport         = line.sport,
-                event         = f"{line.away_team} @ {line.home_team}",
+                event         = event,
                 edge_pct      = edge,
-            ))
+            )
 
-    # Deduplicate: keep only the highest-priced (most liquid) leg per team+event
-    best_by_key: dict = {}
-    for leg in matched:
-        key = (leg.display_name, leg.event)
-        if key not in best_by_key or leg.kalshi_price > best_by_key[key].kalshi_price:
-            best_by_key[key] = leg
+            # Keep highest-priced leg per team+event (most liquid)
+            if key not in best_by_key or kalshi_price > best_by_key[key].kalshi_price:
+                best_by_key[key] = leg
+
     matched = list(best_by_key.values())
-
-    logger.info(f"Matched {len(matched)} legs ({len(contracts)} contracts / {len(lines)} lines)")
+    logger.info(f"Matched {len(matched)} unique legs ({len(contracts)} contracts / {len(lines)} lines)")
     for leg in matched[:8]:
         logger.info(f"  LEG: {leg.display_name} | {leg.kalshi_price:.0f}c | Fair {leg.fair_prob:.1%} | {leg.event}")
     return matched
@@ -325,8 +249,8 @@ def scan_combos(
     min_legs:     int   = 2,
     max_legs:     int   = 4,
     min_odds_gap: int   = 50,
-    min_ev:       float = 0.0,
-    max_combos:   int   = 2000,
+    min_ev:       float = 0.05,
+    max_combos:   int   = 5000,
 ) -> list:
     signals   = []
     evaluated = 0
@@ -345,6 +269,10 @@ def scan_combos(
             try:
                 k_american = kalshi_combo_payout(legs)
             except Exception:
+                continue
+
+            # Sanity cap — real combos shouldn't pay more than +2000
+            if k_american > 2000:
                 continue
 
             fair_prob, f_american = fair_combo_odds(legs)
