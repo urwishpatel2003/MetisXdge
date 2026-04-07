@@ -11,9 +11,9 @@ def _fmt(odds: int) -> str:
     return f"+{odds}" if odds > 0 else str(odds)
 
 
-def _clean(text: str) -> str:
-    """Remove non-latin characters that break ntfy encoding"""
-    return text.encode("latin-1", errors="replace").decode("latin-1")
+def _safe(text: str) -> str:
+    """Replace any non-ASCII characters to avoid encoding errors"""
+    return text.encode("ascii", errors="replace").decode("ascii")
 
 
 def format_combo_notification(signal) -> dict:
@@ -21,29 +21,26 @@ def format_combo_notification(signal) -> dict:
     gap = signal.odds_gap
 
     if gap >= 200:
-        priority = "urgent"
-        tags = "rotating_light,moneybag"
+        priority, tags = "urgent", "rotating_light,moneybag"
     elif gap >= 100:
-        priority = "high"
-        tags = "chart_with_upwards_trend,moneybag"
+        priority, tags = "high", "chart_with_upwards_trend,moneybag"
     else:
-        priority = "default"
-        tags = "bar_chart"
+        priority, tags = "default", "bar_chart"
 
-    title = _clean(
+    title = _safe(
         f"{n}-leg combo | Kalshi {_fmt(signal.kalshi_american)} vs Fair {_fmt(signal.fair_american)} "
         f"(+{gap} pts gap)"
     )
 
     leg_lines = []
     for i, leg in enumerate(signal.legs, 1):
-        leg_lines.append(_clean(
+        leg_lines.append(_safe(
             f"  {i}. {leg.kalshi_title[:45]}\n"
             f"     YES @ {leg.kalshi_price:.0f}c | Sharp: {_fmt(leg.sharp_odds)}\n"
             f"     Fair: {leg.fair_prob:.1%} | Kalshi: {leg.kalshi_prob:.1%}"
         ))
 
-    body = _clean(
+    body = _safe(
         f"Fair prob: {signal.fair_combined_prob:.1%} | "
         f"Kalshi prob: {signal.kalshi_combined_prob:.1%}\n"
         f"EV per $1: ${signal.ev_per_dollar:.3f} | Edge: {signal.edge_pct:.1f}%\n"
@@ -59,12 +56,12 @@ def format_batch_notification(signals: list) -> dict:
     best  = signals[0]
     lines = []
     for s in signals[:8]:
-        lines.append(_clean(
+        lines.append(_safe(
             f"[{s.n_legs}L] {_fmt(s.kalshi_american)} vs {_fmt(s.fair_american)} "
             f"| +{s.odds_gap}pt | EV ${s.ev_per_dollar:.2f}"
         ))
     return {
-        "title": _clean(f"MetisXdge: {len(signals)} combo(s) | Best +{best.odds_gap}pt gap"),
+        "title": _safe(f"MetisXdge: {len(signals)} combo(s) | Best +{best.odds_gap}pt gap"),
         "body":  "\n".join(lines) + f"\n{datetime.utcnow().strftime('%H:%M UTC')}",
         "priority": "urgent" if best.odds_gap >= 200 else "high",
         "tags": "moneybag,bar_chart",
@@ -84,7 +81,7 @@ class NtfyAlerter:
                     "Title":        payload["title"],
                     "Priority":     payload["priority"],
                     "Tags":         payload["tags"],
-                    "Content-Type": "text/plain; charset=utf-8",
+                    "Content-Type": "text/plain",
                 },
                 data=payload["body"].encode("utf-8"),
                 timeout=10,
