@@ -285,6 +285,14 @@ def match_legs(
                 edge_pct      = edge,
             ))
 
+    # Deduplicate: keep only the highest-priced (most liquid) leg per team+event
+    best_by_key: dict = {}
+    for leg in matched:
+        key = (leg.display_name, leg.event)
+        if key not in best_by_key or leg.kalshi_price > best_by_key[key].kalshi_price:
+            best_by_key[key] = leg
+    matched = list(best_by_key.values())
+
     logger.info(f"Matched {len(matched)} legs ({len(contracts)} contracts / {len(lines)} lines)")
     for leg in matched[:8]:
         logger.info(f"  LEG: {leg.display_name} | {leg.kalshi_price:.0f}c | Fair {leg.fair_prob:.1%} | {leg.event}")
