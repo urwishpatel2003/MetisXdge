@@ -383,6 +383,15 @@ def match_legs(
             kalshi_prob = k_price / 100.0
             edge        = (fair_prob - kalshi_prob) / kalshi_prob * 100
 
+            # Only include legs where Kalshi is UNDERPRICING (cheaper than fair)
+            # i.e. Kalshi price < fair price — this is where the edge is
+            if kalshi_prob >= fair_prob:
+                continue  # Kalshi overcharging — skip
+
+            # Minimum edge: Kalshi must be at least 5% cheaper than fair
+            if edge < 5:
+                continue
+
             leg = ComboLeg(
                 kalshi_ticker = ticker,
                 display_name  = display,
