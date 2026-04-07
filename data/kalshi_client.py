@@ -112,12 +112,13 @@ class KalshiClient:
         return self._get("markets", params)
 
     def get_series_markets(self, series_ticker: str) -> list[KalshiContract]:
-        """Fetch all open markets for a specific series (e.g. kxmlbgame)"""
+        """Fetch all open markets for a specific series"""
         contracts = []
         cursor    = None
 
         while True:
-            params = {"status": "open", "limit": 200, "series_ticker": series_ticker}
+            # Try both lowercase and uppercase
+            params = {"status": "open", "limit": 200, "series_ticker": series_ticker.upper()}
             if cursor:
                 params["cursor"] = cursor
 
@@ -130,6 +131,9 @@ class KalshiClient:
             resp.raise_for_status()
             data    = resp.json()
             markets = data.get("markets", [])
+            if not markets and series_ticker in ["kxmlbspread", "kxmlbtotal"]:
+                logger.info(f"Series {series_ticker} API response keys: {list(data.keys())}")
+                logger.info(f"Series {series_ticker} raw sample: {str(data)[:200]}")
 
             for m in markets:
                 try:
