@@ -33,6 +33,7 @@ class OddsLine:
     implied_prob: float       # vig-removed
     raw_prob: float           # with vig
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    point: float = None  # spread/total line value (e.g. -2.5, 8.5)
 
 
 @dataclass
@@ -49,6 +50,7 @@ class KalshiContract:
     sport: Optional[str] = None
     mapped_outcome: Optional[str] = None   # matched to OddsLine outcome
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    point: float = None  # spread/total line value (e.g. -2.5, 8.5)
 
 
 @dataclass
