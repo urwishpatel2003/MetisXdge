@@ -103,6 +103,8 @@ def run_scan(kalshi, odds, ntfy):
 def main():
     logger.info("MetisXdge starting up...")
     logger.info(f"Max legs: {MAX_LEGS} | Min gap: {MIN_ODDS_GAP}pts | Sports: {TARGET_SPORTS}")
+    logger.info(f"KALSHI_EMAIL: '{KALSHI_EMAIL[:4]}...' len={len(KALSHI_EMAIL)}")
+    logger.info(f"KALSHI_PASSWORD len={len(KALSHI_PASSWORD)}")
 
     kalshi = KalshiClient(KALSHI_EMAIL, KALSHI_PASSWORD, ssl_verify=SSL_VERIFY)
     odds   = OddsClient(ODDS_API_KEY, ODDS_BASE_URL)
