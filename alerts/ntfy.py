@@ -12,59 +12,31 @@ def _fmt(odds: int) -> str:
 
 
 def _safe(text: str) -> str:
-    """Replace any non-ASCII characters to avoid encoding errors"""
     return text.encode("ascii", errors="replace").decode("ascii")
-
-
-def format_combo_notification(signal) -> dict:
-    n   = signal.n_legs
-    gap = signal.odds_gap
-
-    if gap >= 200:
-        priority, tags = "urgent", "rotating_light,moneybag"
-    elif gap >= 100:
-        priority, tags = "high", "chart_with_upwards_trend,moneybag"
-    else:
-        priority, tags = "default", "bar_chart"
-
-    title = _safe(
-        f"{n}-leg combo | Kalshi {_fmt(signal.kalshi_american)} vs Fair {_fmt(signal.fair_american)} "
-        f"(+{gap} pts gap)"
-    )
-
-    leg_lines = []
-    for i, leg in enumerate(signal.legs, 1):
-        leg_lines.append(_safe(
-            f"  {i}. {leg.kalshi_title[:45]}\n"
-            f"     YES @ {leg.kalshi_price:.0f}c | Sharp: {_fmt(leg.sharp_odds)}\n"
-            f"     Fair: {leg.fair_prob:.1%} | Kalshi: {leg.kalshi_prob:.1%}"
-        ))
-
-    body = _safe(
-        f"Fair prob: {signal.fair_combined_prob:.1%} | "
-        f"Kalshi prob: {signal.kalshi_combined_prob:.1%}\n"
-        f"EV per $1: ${signal.ev_per_dollar:.3f} | Edge: {signal.edge_pct:.1f}%\n"
-        f"Sports: {', '.join(signal.sports)}\n\n"
-        + "\n".join(leg_lines)
-        + f"\n\n{datetime.utcnow().strftime('%H:%M UTC')}"
-    )
-
-    return {"title": title, "body": body, "priority": priority, "tags": tags}
 
 
 def format_batch_notification(signals: list) -> dict:
     best  = signals[0]
     lines = []
-    for s in signals[:8]:
+
+    for s in signals[:5]:
+        # Show the actual leg titles so you know what to trade
+        leg_names = " + ".join(
+            leg.kalshi_title[:30].strip() for leg in s.legs
+        )
         lines.append(_safe(
             f"[{s.n_legs}L] {_fmt(s.kalshi_american)} vs {_fmt(s.fair_american)} "
-            f"| +{s.odds_gap}pt | EV ${s.ev_per_dollar:.2f}"
+            f"| +{s.odds_gap}pt | EV ${s.ev_per_dollar:.2f}\n"
+            f"  {leg_names}"
         ))
+
+    body = "\n\n".join(lines) + f"\n\n{datetime.utcnow().strftime('%H:%M UTC')}"
+
     return {
-        "title": _safe(f"MetisXdge: {len(signals)} combo(s) | Best +{best.odds_gap}pt gap"),
-        "body":  "\n".join(lines) + f"\n{datetime.utcnow().strftime('%H:%M UTC')}",
+        "title":    _safe(f"MetisXdge: {len(signals)} signal(s) | Best +{best.odds_gap}pt gap"),
+        "body":     body,
         "priority": "urgent" if best.odds_gap >= 200 else "high",
-        "tags": "moneybag,bar_chart",
+        "tags":     "moneybag,bar_chart",
     }
 
 
@@ -93,14 +65,9 @@ class NtfyAlerter:
             logger.error(f"ntfy failed: {e}")
             return False
 
-    def send_combo(self, signal) -> bool:
-        return self._send(format_combo_notification(signal))
-
     def send_batch(self, signals: list) -> bool:
         if not signals:
             return True
-        if len(signals) == 1:
-            return self.send_combo(signals[0])
         return self._send(format_batch_notification(signals))
 
     def test(self) -> bool:
