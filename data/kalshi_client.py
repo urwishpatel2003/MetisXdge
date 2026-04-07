@@ -127,6 +127,7 @@ class KalshiClient:
             cursor = data.get("cursor")
             if not cursor or not markets:
                 break
+            time.sleep(0.5)  # avoid 429 rate limit between pages
 
         logger.info(f"Fetched {len(contracts)} Kalshi contracts")
         return contracts
