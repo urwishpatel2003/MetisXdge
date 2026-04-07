@@ -173,7 +173,7 @@ def match_legs(
 
     for contract in contracts:
         # Only h2h moneyline markets — strict price range 25-75c
-        if contract.yes_price < 25 or contract.yes_price > 75:
+        if contract.yes_price < 30 or contract.yes_price > 70:
             continue
 
         parts = contract.title.split(',')
@@ -272,7 +272,7 @@ def scan_combos(
                 continue
 
             # Sanity cap — real combos shouldn't pay more than +2000
-            if k_american > 2000:
+            if k_american > 1500:
                 continue
 
             fair_prob, f_american = fair_combo_odds(legs)
