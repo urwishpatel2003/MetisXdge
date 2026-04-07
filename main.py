@@ -7,7 +7,7 @@ from datetime import datetime
 
 from config.settings import (
     ODDS_API_KEY, ODDS_BASE_URL,
-    KALSHI_API_KEY,
+    KALSHI_KEY_ID, KALSHI_PRIVATE_KEY,
     NTFY_TOPIC, NTFY_BASE_URL,
     TARGET_SPORTS, SHARP_BOOKS,
     MIN_ODDS_GAP, MIN_EV, MIN_FAIR_PROB,
@@ -104,7 +104,7 @@ def main():
     logger.info("MetisXdge starting up...")
     logger.info(f"Max legs: {MAX_LEGS} | Min gap: {MIN_ODDS_GAP}pts | Sports: {TARGET_SPORTS}")
 
-    kalshi = KalshiClient(KALSHI_API_KEY, ssl_verify=SSL_VERIFY)
+    kalshi = KalshiClient(KALSHI_KEY_ID, KALSHI_PRIVATE_KEY, ssl_verify=SSL_VERIFY)
     odds   = OddsClient(ODDS_API_KEY, ODDS_BASE_URL)
     ntfy   = NtfyAlerter(topic=NTFY_TOPIC, base_url=NTFY_BASE_URL)
 
