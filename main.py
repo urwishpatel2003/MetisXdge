@@ -104,6 +104,9 @@ def main():
     logger.info("MetisXdge starting up...")
     logger.info(f"Max legs: {MAX_LEGS} | Min gap: {MIN_ODDS_GAP}pts | Sports: {TARGET_SPORTS}")
 
+    logger.info(f"PRIVATE_KEY first 50: {repr(KALSHI_PRIVATE_KEY[:50])}")
+    logger.info(f"PRIVATE_KEY last 50: {repr(KALSHI_PRIVATE_KEY[-50:])}")
+    logger.info(f"PRIVATE_KEY len: {len(KALSHI_PRIVATE_KEY)}")
     kalshi = KalshiClient(KALSHI_KEY_ID, KALSHI_PRIVATE_KEY, ssl_verify=SSL_VERIFY)
     odds   = OddsClient(ODDS_API_KEY, ODDS_BASE_URL)
     ntfy   = NtfyAlerter(topic=NTFY_TOPIC, base_url=NTFY_BASE_URL)
